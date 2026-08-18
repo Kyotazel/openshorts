@@ -1245,7 +1245,14 @@ def get_viral_clips(transcript_result, video_duration):
             words.append({'w': word['word'], 's': word['start'], 'e': word['end']})
 
     try:
-        windows = build_transcript_windows(transcript_result, video_duration)
+        # Scoring windows must be able to CONTAIN a max-length clip (the detail
+        # prompt keeps clips inside their candidate window), so scale them with
+        # the requested band — a user asking for 60-90s clips on the default
+        # 90s windows would get clips squeezed against the window walls.
+        min_secs, max_secs = clip_duration_bounds()
+        windows = build_transcript_windows(
+            transcript_result, video_duration,
+            window_seconds=max(90, int(max_secs * 1.5)))
         print(f"   Built {len(windows)} scoring window(s).")
         costs = []
 
@@ -1276,7 +1283,6 @@ def get_viral_clips(transcript_result, video_duration):
         # --- Pass 2: detailed clip extraction on the shortlist ---
         payload = [{"id": w["id"], "start": w["start"], "end": w["end"], "text": w["text"]} for w in shortlist]
         min_clips, max_clips = clip_count_targets(len(shortlist))
-        min_secs, max_secs = clip_duration_bounds()
         prompt = gemini_worker.DETAIL_PROMPT_TEMPLATE.format(
             video_duration=video_duration, language=language,
             min_clips=min_clips, max_clips=max_clips,
