@@ -260,7 +260,8 @@ def _run_ffmpeg(command):
 
 def perform_recut(*, input_path, segments, output_dir, clean_name,
                   reframe=False, output_format="auto", watermark=False,
-                  captions_transcript=None, runner=None, renderer=None,
+                  captions_transcript=None, force_strategy=None,
+                  runner=None, renderer=None,
                   watermarker=None, captioner=None):
     """Render a recut clip. Returns (served_filename, clean_filename).
 
@@ -292,7 +293,13 @@ def perform_recut(*, input_path, segments, output_dir, clean_name,
                        runner=runner)
 
         if reframe:
-            render = renderer or _main_attr("render_clip")
+            if renderer is not None:
+                render = renderer  # injected fakes keep the 3-arg contract
+            else:
+                main_render = _main_attr("render_clip")
+
+                def render(i, o, f):
+                    return main_render(i, o, f, force_strategy=force_strategy)
             if not render(work_path, out_path, output_format):
                 raise RuntimeError("reframe failed on the recut clip")
         else:

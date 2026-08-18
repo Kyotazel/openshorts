@@ -230,12 +230,18 @@ def _run(cmd):
                    stderr=subprocess.PIPE, timeout=1800)
 
 
-def render(input_video, final_output_video, aspect_ratio, content_ranges=None):
+def render(input_video, final_output_video, aspect_ratio, content_ranges=None,
+           force_strategy=None):
     """Full v2 reframe of one clip. Raises on failure (caller falls back).
 
     ``content_ranges`` comes from screencast_layout.detect_content_ranges() on
     the SOURCE video, already translated into this clip's timeline. None or []
     means the layout never triggers, which is the default.
+
+    ``force_strategy`` ('WIDE' / 'TRACK' / any layout the render loop knows)
+    applies that layout to EVERY scene, skipping the classifier and the layout
+    upgrades — it exists for the clip editor's manual framing override, where
+    the user's explicit choice is the whole point.
     """
     import main as m
     content_ranges = content_ranges or []
@@ -256,7 +262,12 @@ def render(input_video, final_output_video, aspect_ratio, content_ranges=None):
         scenes = [(FrameTimecode(0, fps), FrameTimecode(total, fps))]
 
     scene_boundaries = [(s.get_frames(), e.get_frames()) for s, e in scenes]
-    strategies = m.analyze_scenes_strategy(input_video, scenes)
+    if force_strategy:
+        strategies = [force_strategy] * len(scenes)
+        content_ranges = []  # no screencast/inset upgrades over an explicit choice
+        print(f"   🎯 Framing override: every scene -> {force_strategy}")
+    else:
+        strategies = m.analyze_scenes_strategy(input_video, scenes)
 
     # SPLIT is an upgrade applied on top of the TRACK/GENERAL verdict, keyed by
     # the scene's START FRAME rather than its index: scene_frame_ranges() drops

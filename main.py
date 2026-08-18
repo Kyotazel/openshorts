@@ -882,13 +882,17 @@ def auto_caption_clip(clip_path, transcript, clip_start, clip_end):
         return None
 
 
-def render_clip(input_video, final_output_video, output_format="auto"):
+def render_clip(input_video, final_output_video, output_format="auto",
+                force_strategy=None):
     """Route a cut clip through the right renderer for the chosen output format.
-    vertical/auto -> 9:16 reframe, square -> 1:1 reframe, horizontal -> keep."""
+    vertical/auto -> 9:16 reframe, square -> 1:1 reframe, horizontal -> keep.
+    ``force_strategy`` (e.g. 'WIDE'/'TRACK') pins every scene's layout — the
+    clip editor's manual framing override."""
     if output_format == "horizontal":
         return finalize_clip_passthrough(input_video, final_output_video)
     aspect = 1.0 if output_format == "square" else ASPECT_RATIO
-    return process_video_to_vertical(input_video, final_output_video, aspect_ratio=aspect)
+    return process_video_to_vertical(input_video, final_output_video, aspect_ratio=aspect,
+                                     force_strategy=force_strategy)
 
 
 # Watermark geometry, as fractions of the clip width/height.
@@ -956,11 +960,14 @@ def apply_watermark(video_path):
     return False
 
 
-def process_video_to_vertical(input_video, final_output_video, aspect_ratio=ASPECT_RATIO):
+def process_video_to_vertical(input_video, final_output_video, aspect_ratio=ASPECT_RATIO,
+                              force_strategy=None):
     """
     Core logic to reframe a horizontal video to a target aspect ratio using
     scene detection and Active Speaker Tracking (MediaPipe).
     aspect_ratio: width/height of the output (9/16 vertical, 1.0 square).
+    force_strategy pins every scene's layout (v2 engine only — the v1 loop
+    below has no layout concept beyond its own classifier).
     """
     script_start_time = time.time()
 
@@ -970,7 +977,8 @@ def process_video_to_vertical(input_video, final_output_video, aspect_ratio=ASPE
         try:
             import reframe_v2
             t0 = time.time()
-            result = reframe_v2.render(input_video, final_output_video, aspect_ratio)
+            result = reframe_v2.render(input_video, final_output_video, aspect_ratio,
+                                       force_strategy=force_strategy)
             print(f"   ⏱️ Reframe v2 total: {time.time() - t0:.1f}s")
             return result
         except Exception as e:

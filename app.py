@@ -2267,6 +2267,7 @@ async def get_clip_edl(job_id: str, clip_index: int, request: Request):
         "clip_index": clip_index,
         "title": clip.get('video_title_for_youtube_short') or '',
         "segments": segments,
+        "framing": (clip.get('recipe') or {}).get('framing') or 'auto',
         "canonical_range": canonical_range,
         "duration": total,
         "current_file": current_file,
@@ -2299,6 +2300,15 @@ class RerenderRequest(BaseModel):
     segments: List[RerenderSegment]
     snap_to_words: bool = False
     reapply_captions: bool = True
+    # None = inherit the recipe's framing (so plain trims keep the look);
+    # 'auto' resets to the classifier; 'full'/'track' force a layout.
+    framing: Optional[str] = None
+
+
+# Manual framing -> reframe-engine strategy. 'full' shows the whole source
+# frame (WIDE: no side-cropping, blurred filler bands); 'track' forces the
+# subject-tracking crop. Anything non-auto needs the retained source video.
+_FRAMING_STRATEGIES = {"auto": None, "full": "WIDE", "track": "TRACK"}
 
 
 # One lock per job (same pattern as _restore_locks): rerenders on the same job
@@ -2356,6 +2366,12 @@ async def _rerender_locked(req: RerenderRequest, request: Request, job):
     source_path = _locate_source(req.job_id)
     source_duration = _source_duration_seconds(source_path) if source_path else None
 
+    framing = req.framing or (clip.get('recipe') or {}).get('framing') or 'auto'
+    if framing not in _FRAMING_STRATEGIES:
+        raise HTTPException(status_code=400,
+                            detail="framing must be one of: auto, full, track")
+    force_strategy = _FRAMING_STRATEGIES[framing]
+
     try:
         segments = recut.normalize_segments(
             [{"start": s.start, "end": s.end} for s in req.segments],
@@ -2379,14 +2395,19 @@ async def _rerender_locked(req: RerenderRequest, request: Request, job):
     except recut.RecutError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    fast = (os.path.exists(canonical_path)
+    # A framing override always re-reframes from the source: the canonical file
+    # has the old layout baked into its pixels.
+    fast = (force_strategy is None
+            and os.path.exists(canonical_path)
             and recut.within_range(segments, canonical_range['start'],
                                    canonical_range['end']))
     if not fast and not source_path:
         raise HTTPException(
             status_code=409,
-            detail="The source video is no longer on the server, so segments "
-                   "must stay within the original clip range.")
+            detail=("The source video is no longer on the server; changing the "
+                    "framing needs it." if force_strategy is not None else
+                    "The source video is no longer on the server, so segments "
+                    "must stay within the original clip range."))
 
     total = recut.total_duration(segments)
     rerender_minutes = (max(1, math.ceil(total / 60.0))
@@ -2410,6 +2431,7 @@ async def _rerender_locked(req: RerenderRequest, request: Request, job):
             output_dir=output_dir, clean_name=clean_name,
             reframe=True, output_format=data.get('output_format', 'auto'),
             watermark=bool(job.get('watermark')),
+            force_strategy=force_strategy,
             captions_transcript=v_transcript)
 
     try:
@@ -2419,6 +2441,8 @@ async def _rerender_locked(req: RerenderRequest, request: Request, job):
         new_video_url = f"/videos/{req.job_id}/{served_name}"
         new_recipe = {"v": 1, "segments": segments,
                       "canonical_range": canonical_range}
+        if framing != 'auto':
+            new_recipe["framing"] = framing
         # Covering range, deliberately not segments[0]/segments[-1]: segments
         # may legally be out of source order, and downstream consumers only
         # need a sane positive window (the recipe is the real timeline).
@@ -2442,6 +2466,7 @@ async def _rerender_locked(req: RerenderRequest, request: Request, job):
             "success": True,
             "new_video_url": new_video_url,
             "recipe": new_recipe,
+            "framing": framing,
             "start": new_start,
             "end": new_end,
             "duration": total,

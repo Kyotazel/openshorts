@@ -160,6 +160,22 @@ class TestRerenderValidation:
         assert resp.status_code == 409
         assert fake_recut == []
 
+    def test_invalid_framing_400(self, job, fake_recut):
+        resp = _request("POST", "/api/clip/rerender", {
+            "job_id": JOB_ID, "clip_index": 0, "framing": "cinematic",
+            "segments": [{"start": 12, "end": 30}]})
+        assert resp.status_code == 400
+        assert fake_recut == []
+
+    def test_framing_without_source_409(self, job, fake_recut):
+        os.remove(job["dir"] / "src.mp4")
+        resp = _request("POST", "/api/clip/rerender", {
+            "job_id": JOB_ID, "clip_index": 0, "framing": "full",
+            "segments": [{"start": 12, "end": 30}]})  # in-range, but framing needs source
+        assert resp.status_code == 409
+        assert "framing" in resp.json()["detail"]
+        assert fake_recut == []
+
     def test_snap_clamp_inverted_segment_400_not_500(self, job, fake_recut,
                                                      monkeypatch):
         # No source + snap_to_words: a segment fully outside the canonical
@@ -216,6 +232,39 @@ class TestRerenderPaths:
             "segments": [{"start": 12, "end": 22}]})
         assert resp.status_code == 200
         assert fake_recut[0]["captions_transcript"] is None
+
+    def test_framing_full_forces_source_path_and_persists(self, job, fake_recut):
+        # In-range segments would take the fast path, but a framing override
+        # must re-reframe from the source with the forced layout.
+        resp = _request("POST", "/api/clip/rerender", {
+            "job_id": JOB_ID, "clip_index": 0, "framing": "full",
+            "segments": [{"start": 12, "end": 22}]})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["render_path"] == "source"
+        assert data["framing"] == "full"
+        assert data["recipe"]["framing"] == "full"
+        call = fake_recut[0]
+        assert call["input_path"].endswith("src.mp4")
+        assert call["reframe"] is True
+        assert call["force_strategy"] == "WIDE"
+
+        # A follow-up trim WITHOUT a framing field inherits the recipe's
+        # framing (the look must not silently revert on a plain trim)...
+        resp2 = _request("POST", "/api/clip/rerender", {
+            "job_id": JOB_ID, "clip_index": 0,
+            "segments": [{"start": 13, "end": 21}]})
+        assert resp2.status_code == 200
+        assert resp2.json()["framing"] == "full"
+        assert fake_recut[1]["force_strategy"] == "WIDE"
+
+        # ...while an explicit 'auto' resets to the classifier and the fast path.
+        resp3 = _request("POST", "/api/clip/rerender", {
+            "job_id": JOB_ID, "clip_index": 0, "framing": "auto",
+            "segments": [{"start": 13, "end": 21}]})
+        assert resp3.status_code == 200
+        assert resp3.json()["render_path"] == "fast"
+        assert "framing" not in resp3.json()["recipe"]
 
 
 class TestRerenderPersistence:

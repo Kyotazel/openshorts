@@ -92,6 +92,9 @@ export default function ClipEditor({ jobId, clipIndex, clipTitle, onClose, onRer
 
     const [snapToWords, setSnapToWords] = useState(true);
     const [reapplyCaptions, setReapplyCaptions] = useState(true);
+    // Framing override: 'auto' (classifier) | 'full' (whole frame) | 'track'.
+    const [framing, setFraming] = useState('auto');
+    const [renderedFraming, setRenderedFraming] = useState('auto');
     // The recipe of the currently RENDERED preview (playhead maps onto it).
     const [renderedSegments, setRenderedSegments] = useState(null);
     const [previewUrl, setPreviewUrl] = useState(null);
@@ -120,6 +123,8 @@ export default function ClipEditor({ jobId, clipIndex, clipTitle, onClose, onRer
                 setEdl(data);
                 dispatch({ type: 'init', segments: data.segments.map((s) => ({ ...s })) });
                 setRenderedSegments(data.segments.map((s) => ({ ...s })));
+                setFraming(data.framing || 'auto');
+                setRenderedFraming(data.framing || 'auto');
                 setReapplyCaptions(true);
                 setPreviewUrl(getApiUrl(`/videos/${jobId}/${data.current_file}`));
             } catch (e) {
@@ -139,8 +144,9 @@ export default function ClipEditor({ jobId, clipIndex, clipTitle, onClose, onRer
     const total = totalOf(segments);
     const dirty = useMemo(() => {
         if (!renderedSegments) return false;
-        return JSON.stringify(segments) !== JSON.stringify(renderedSegments);
-    }, [segments, renderedSegments]);
+        return JSON.stringify(segments) !== JSON.stringify(renderedSegments)
+            || framing !== renderedFraming;
+    }, [segments, renderedSegments, framing, renderedFraming]);
 
     // Trim bounds: with the source gone, cuts must stay inside the range the
     // canonical file was rendered from.
@@ -152,11 +158,13 @@ export default function ClipEditor({ jobId, clipIndex, clipTitle, onClose, onRer
         (seg) => !sourceAvailable && (seg.start < canonical.start - 0.05 || seg.end > canonical.end + 0.05),
         [sourceAvailable, canonical],
     );
-    const needsSourcePath = segments.some((s) => s.start < canonical.start - 0.05 || s.end > canonical.end + 0.05);
+    const needsSourcePath = framing !== 'auto'
+        || segments.some((s) => s.start < canonical.start - 0.05 || s.end > canonical.end + 0.05);
     const invalidSegments = segments.some(outOfRange);
     const overCaps = segments.length > limits.max_segments || total > limits.max_total_seconds;
     const canRender = !rendering && segments.length > 0 && !invalidSegments && !overCaps
-        && segments.every((s) => s.end - s.start >= minSeg);
+        && segments.every((s) => s.end - s.start >= minSeg)
+        && (framing === 'auto' || sourceAvailable);
 
     // ---- helpers ------------------------------------------------------------
     const snapEdge = useCallback((t, kind) => {
@@ -367,6 +375,7 @@ export default function ClipEditor({ jobId, clipIndex, clipTitle, onClose, onRer
                     segments: segments.map((s) => ({ start: s.start, end: s.end })),
                     snap_to_words: false, // boundaries are already word-snapped client-side
                     reapply_captions: reapplyCaptions,
+                    framing,
                 }),
             });
             if (!res.ok) {
@@ -376,6 +385,8 @@ export default function ClipEditor({ jobId, clipIndex, clipTitle, onClose, onRer
             }
             const data = await res.json();
             setRenderedSegments(data.recipe.segments.map((s) => ({ ...s })));
+            setRenderedFraming(data.framing || 'auto');
+            setFraming(data.framing || 'auto');
             dispatch({ type: 'init', segments: data.recipe.segments.map((s) => ({ ...s })) });
             setPreviewUrl(`${getApiUrl(data.new_video_url)}?t=${Date.now()}`);
             onRerendered?.(clipIndex, data);
@@ -548,6 +559,43 @@ export default function ClipEditor({ jobId, clipIndex, clipTitle, onClose, onRer
                             >
                                 <Plus size={14} /> add segment
                             </button>
+                        </div>
+
+                        {/* framing override */}
+                        <div>
+                            <p className="eyebrow mb-2">Framing</p>
+                            <div className="grid grid-cols-3 gap-1.5">
+                                {[
+                                    { value: 'auto', label: 'auto', hint: 'AI decides per scene' },
+                                    { value: 'full', label: 'full frame', hint: 'whole shot, no side-crop' },
+                                    { value: 'track', label: 'track subject', hint: 'crop follows the person' },
+                                ].map((f) => (
+                                    <button
+                                        key={f.value}
+                                        type="button"
+                                        title={f.hint}
+                                        disabled={f.value !== 'auto' && !sourceAvailable}
+                                        onClick={() => setFraming(f.value)}
+                                        className={`py-1.5 px-2 rounded-input border text-xs lowercase transition-colors
+                                            ${framing === f.value
+                                                ? 'border-[color:var(--color-accent)] text-ink'
+                                                : 'border-rule2 text-muted hover:border-[color:var(--color-accent)]'}
+                                            disabled:opacity-40 disabled:cursor-not-allowed`}
+                                    >
+                                        {f.label}
+                                    </button>
+                                ))}
+                            </div>
+                            {!sourceAvailable && (
+                                <p className="text-[11px] text-muted mt-1.5 leading-relaxed">
+                                    framing changes need the source video, which is no longer on the server
+                                </p>
+                            )}
+                            {framing !== renderedFraming && (
+                                <p className="text-[11px] text-muted mt-1.5 leading-relaxed">
+                                    changing the framing re-runs the reframe engine (slower than a fast recut)
+                                </p>
+                            )}
                         </div>
 
                         {/* toggles */}

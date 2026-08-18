@@ -217,6 +217,14 @@ TOOLS = [
                     "type": "boolean",
                     "description": "Burn default captions back on after the recut (default true).",
                 },
+                "framing": {
+                    "type": "string", "enum": ["auto", "full", "track"],
+                    "description": "Layout override: 'full' shows the whole source frame "
+                                   "(no side-cropping), 'track' forces the subject-tracking "
+                                   "crop, 'auto' resets to the AI classifier. Omit to keep "
+                                   "the clip's current framing. Non-auto values re-run the "
+                                   "reframe engine and need the retained source video.",
+                },
             },
             "required": ["job_id", "clip_index", "segments"],
         },
@@ -373,7 +381,7 @@ async def _tool_add_subtitles(client, args):
 async def _tool_recut_clip(client, args):
     body = {"job_id": args["job_id"], "clip_index": args["clip_index"],
             "segments": args["segments"]}
-    for k in ("snap_to_words", "reapply_captions"):
+    for k in ("snap_to_words", "reapply_captions", "framing"):
         if args.get(k) is not None:
             body[k] = args[k]
     resp = await client.post("/api/clip/rerender", json=body)
