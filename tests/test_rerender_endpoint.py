@@ -160,6 +160,21 @@ class TestRerenderValidation:
         assert resp.status_code == 409
         assert fake_recut == []
 
+    def test_snap_clamp_inverted_segment_400_not_500(self, job, fake_recut,
+                                                     monkeypatch):
+        # No source + snap_to_words: a segment fully outside the canonical
+        # range clamps to an inverted (end < start) window. That must be
+        # rejected as a 400 by the post-snap re-validation, never reach
+        # ffmpeg as `-ss 150 -to 30` and surface as a 500.
+        os.remove(job["dir"] / "src.mp4")
+        monkeypatch.setattr(recut, "snap_segments",
+                            lambda segments, transcript, bound: segments)
+        resp = _request("POST", "/api/clip/rerender", {
+            "job_id": JOB_ID, "clip_index": 0, "snap_to_words": True,
+            "segments": [{"start": 200, "end": 210}]})
+        assert resp.status_code == 400
+        assert fake_recut == []
+
 
 class TestRerenderPaths:
     def test_fast_path_cuts_from_canonical_clip(self, job, fake_recut):

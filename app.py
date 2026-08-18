@@ -2272,6 +2272,11 @@ class RerenderRequest(BaseModel):
     reapply_captions: bool = True
 
 
+# One lock per job (same pattern as _restore_locks): rerenders on the same job
+# share metadata.json and the canonical files, so they must not interleave.
+_rerender_locks: Dict[str, asyncio.Lock] = {}
+
+
 @app.post("/api/clip/rerender")
 async def rerender_clip(req: RerenderRequest, request: Request):
     """Re-render a clip from an edited EDL (the clip editor's save button).
@@ -2291,6 +2296,16 @@ async def rerender_clip(req: RerenderRequest, request: Request):
     job = jobs[req.job_id]
     await _assert_job_owner(request, job)
 
+    # Serialize rerenders per job: concurrent saves (easy for an MCP agent to
+    # produce) would otherwise race on the shared metadata.json
+    # read-modify-write below, with the last writer silently reverting the
+    # other clip's recipe/video_url.
+    lock = _rerender_locks.setdefault(req.job_id, asyncio.Lock())
+    async with lock:
+        return await _rerender_locked(req, request, job)
+
+
+async def _rerender_locked(req: RerenderRequest, request: Request, job):
     output_dir = os.path.join(OUTPUT_DIR, req.job_id)
     json_files = glob.glob(os.path.join(output_dir, "*_metadata.json"))
     if not json_files:
@@ -2327,6 +2342,11 @@ async def rerender_clip(req: RerenderRequest, request: Request):
                     {"start": round(max(s['start'], canonical_range['start']), 3),
                      "end": round(min(s['end'], canonical_range['end']), 3)}
                     for s in segments]
+            # Re-validate after snapping/clamping: a segment fully outside the
+            # canonical range clamps to an inverted (end < start) window, and
+            # snapping can stretch the total past the cap. Without this it
+            # reaches ffmpeg and dies as a 500 instead of a clean 400.
+            segments = recut.normalize_segments(segments, source_duration)
     except recut.RecutError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
