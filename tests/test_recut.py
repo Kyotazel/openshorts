@@ -171,12 +171,25 @@ class TestFfmpegCommands:
                                       ["p0.mp4", "p1.mp4"])
         assert commands[0] == ["ffmpeg", "-y", "-ss", "10", "-to", "20",
                                "-i", "in.mp4", "-c:v", "test", "-c:a", "test",
+                               *recut.METADATA_SCRUB,
+                               "-movflags", "+faststart",
                                "p0.mp4"]
         assert commands[1][3] == "30" and commands[1][-1] == "p1.mp4"
 
     def test_concat_command_stream_copies(self):
         cmd = recut.concat_command("list.txt", "out.mp4")
         assert "-c" in cmd and cmd[cmd.index("-c") + 1] == "copy"
+
+    def test_final_outputs_carry_faststart_and_scrub(self):
+        # The delivered-artifact invariants: the moov atom must be fronted
+        # (browser preview hangs otherwise) and source metadata scrubbed —
+        # on the concat join AND on the single-segment direct cut, since both
+        # can be the file the fast path serves.
+        concat = recut.concat_command("list.txt", "out.mp4")
+        single = recut.cut_commands("in.mp4", [_seg(10, 20)], ["out.mp4"])[0]
+        for cmd in (concat, single):
+            assert "+faststart" in cmd
+            assert "-map_metadata" in cmd
 
     def test_single_segment_cuts_straight_to_output(self, tmp_path):
         ran = []

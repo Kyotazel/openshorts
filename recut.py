@@ -22,8 +22,10 @@ import os
 import shutil
 import subprocess
 import time
+import uuid
 
-from ffmpeg_utils import QUALITY_FAST, audio_encode_args, video_encode_args
+from ffmpeg_utils import (METADATA_SCRUB, QUALITY_FAST, audio_encode_args,
+                          video_encode_args)
 
 # EDL limits. Deliberately generous — the editor is for humans fixing cuts,
 # not for stitching feature films.
@@ -186,6 +188,12 @@ def cut_commands(input_path, segments, part_paths):
             "-i", input_path,
             *video_encode_args(QUALITY_FAST),
             *audio_encode_args(),
+            # Every final-artifact producer in the repo scrubs source metadata
+            # and fronts the moov atom (a fast-path recut IS the delivered
+            # file, and without +faststart the browser preview hangs). Also on
+            # intermediate parts: harmless, and it keeps the source's handler
+            # metadata from ever entering the chain.
+            *METADATA_SCRUB, "-movflags", "+faststart",
             part,
         ])
     return commands
@@ -196,7 +204,8 @@ def concat_command(list_path, out_path):
     generation loss on the join."""
     return [
         "ffmpeg", "-y", "-f", "concat", "-safe", "0",
-        "-i", list_path, "-c", "copy", out_path,
+        "-i", list_path, "-c", "copy",
+        *METADATA_SCRUB, "-movflags", "+faststart", out_path,
     ]
 
 
@@ -207,11 +216,14 @@ def run_cut_concat(input_path, segments, out_path, workdir, runner=None):
         run(cut_commands(input_path, segments, [out_path])[0])
         return out_path
 
+    # Unique per invocation: two concurrent recuts in the same job dir must
+    # not overwrite each other's parts (or delete them via the finally below).
+    token = uuid.uuid4().hex[:8]
     part_paths = [
-        os.path.join(workdir, f"recut_part_{i}.mp4")
+        os.path.join(workdir, f"temp_recut_part_{token}_{i}.mp4")
         for i in range(len(segments))
     ]
-    list_path = os.path.join(workdir, "recut_concat.txt")
+    list_path = os.path.join(workdir, f"temp_recut_concat_{token}.txt")
     try:
         for command in cut_commands(input_path, segments, part_paths):
             run(command)
@@ -228,9 +240,19 @@ def run_cut_concat(input_path, segments, out_path, workdir, runner=None):
     return out_path
 
 
+# Same ceiling as apply_watermark's: a hung ffmpeg must not pin the executor
+# thread (and the caller's quota reservation) until a server restart.
+FFMPEG_TIMEOUT_SECONDS = 1800
+
+
 def _run_ffmpeg(command):
-    result = subprocess.run(
-        command, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    try:
+        result = subprocess.run(
+            command, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+            timeout=FFMPEG_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired:
+        raise RuntimeError(
+            f"ffmpeg timed out after {FFMPEG_TIMEOUT_SECONDS}s ({command[1:6]}...)")
     if result.returncode != 0:
         tail = (result.stderr or b"").decode("utf-8", "replace")[-400:]
         raise RuntimeError(f"ffmpeg failed ({command[1:6]}...): {tail}")
@@ -257,7 +279,10 @@ def perform_recut(*, input_path, segments, output_dir, clean_name,
     implementations, imported lazily so this module stays importable without
     the ML stack; tests inject fakes.
     """
-    out_name = f"recut_{int(time.time())}_{clean_name}"
+    # The uuid token keeps two same-second saves of one clip from writing (and
+    # then serving) the same filename; the timestamp keeps "newest derived
+    # file" resolution working in _canonical_clip_file.
+    out_name = f"recut_{int(time.time())}_{uuid.uuid4().hex[:6]}_{clean_name}"
     out_path = os.path.join(output_dir, out_name)
     work_name = f"temp_{out_name}"
     work_path = os.path.join(output_dir, work_name)
