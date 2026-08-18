@@ -44,9 +44,10 @@ async def setup_async(app, keep_reservation_ids=None):
     ``keep_reservation_ids`` belong to jobs being resumed after a restart and
     must not be refunded (see app._resume_interrupted_jobs).
     """
-    from . import database, metering, videos
+    from . import database, digest, metering, videos
     await database.init_engine()
     await metering.release_orphaned_reservations(keep_ids=keep_reservation_ids)
     metering.start_sweeper()
     videos.start_sweeper()
+    digest.start_digest()
     print("☁️  Cloud billing mode ENABLED (DB ready, metering active).")
