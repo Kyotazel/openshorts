@@ -892,10 +892,9 @@ async def _notify_clips_ready(job_id):
 
 
 async def _notify_clip_activity(job_id):
-    """High-signal Telegram pulse when clips are created — NOT every clip (that
-    would drown the ops channel as free usage grows). Only:
-      * a user's very first clips (activation), and
-      * any paid user's clips.
+    """Telegram pulse when a PAID user's clips are created. Free-tier activity
+    (including first clips) is deliberately silent: at current signup volume it
+    drowned the ops channel without being actionable.
     Telegram-only (best effort, no email)."""
     if not BILLING_ENABLED:
         return
@@ -906,31 +905,20 @@ async def _notify_clip_activity(job_id):
     if not clips:
         return
     try:
-        from sqlalchemy import select, func, and_
         from cloud.database import session as cloud_session
-        from cloud.models import User, UserVideo
+        from cloud.models import User
         from cloud import metering
         async with cloud_session() as s:
             user = await s.get(User, job['user_id'])
             if not user:
                 return
             sub = await metering._active_subscription(s, user.id)
-            # Clips from OTHER jobs (this job's are already archived by now).
-            prior = (await s.execute(
-                select(func.count(UserVideo.id)).where(and_(
-                    UserVideo.user_id == user.id, UserVideo.job_id != job_id,
-                ))
-            )).scalar_one()
-        plan = sub.plan if sub else "free"
-        is_paid = sub is not None
-        first_clip = prior == 0
-        if not (first_clip or is_paid):
+        if sub is None:
             return
         title = clips[0].get('video_title_for_youtube_short') or clips[0].get('title') or "video"
         n = len(clips)
-        tag = "🎬 First clips!" if first_clip else "🎬 Clips created"
         await _alerts.send_telegram(
-            f"{tag}\n{user.email} ({plan}) — “{title}” ({n} clip{'s' if n != 1 else ''})")
+            f"🎬 Clips created\n{user.email} ({sub.plan}) — “{title}” ({n} clip{'s' if n != 1 else ''})")
     except Exception as e:
         print(f"⚠️  Clip-activity notify error for {job_id}: {e}")
 
