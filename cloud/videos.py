@@ -37,6 +37,8 @@ async def archive_job(user_id, job_id, clips, output_dir):
         except Exception as e:
             print(f"⚠️  R2 upload failed for {key}: {e}")
 
+    base_name = (os.path.basename(meta_files[0]).replace("_metadata.json", "")
+                 if meta_files else None)
     uploaded = []  # (clip_index, filename, key, title, size_bytes)
     for i, clip in enumerate(clips):
         video_url = clip.get("video_url") or ""
@@ -53,6 +55,22 @@ async def archive_job(user_id, job_id, clips, output_dir):
             print(f"⚠️  R2 upload failed for {key}: {e}")
             continue
         uploaded.append((i, filename, key, _clip_title(clip), os.path.getsize(local_path)))
+
+        # Also archive the clean canonical when the served file is a derived
+        # one (captioned/recut): it is the editable master — the clip editor's
+        # fast path and /api/subtitle re-styles cut from it, so a project
+        # restored after a redeploy is only editable if it comes back too.
+        # Restore downloads every key under the job prefix, so no change is
+        # needed on that side; the free-retention purge deletes by prefix.
+        if base_name:
+            clean = f"{base_name}_clip_{i + 1}.mp4"
+            clean_path = os.path.join(output_dir, clean)
+            if clean != filename and os.path.exists(clean_path):
+                clean_key = storage.job_key(user_id, job_id, clean)
+                try:
+                    await asyncio.to_thread(storage.upload_file, clean_path, clean_key)
+                except Exception as e:
+                    print(f"⚠️  R2 upload failed for {clean_key}: {e}")
 
     if not uploaded:
         return
@@ -317,8 +335,17 @@ async def purge_free_expired():
             for v in items["videos"]:
                 await asyncio.to_thread(storage.delete_key, v.r2_key)
             for p in items["projects"]:
-                if p.metadata_r2_key:
-                    await asyncio.to_thread(storage.delete_key, p.metadata_r2_key)
+                # Delete everything under the job prefix, not just the metadata
+                # key: the archive also stores clean canonical clips (which have
+                # no DB row of their own) and superseded derivatives would
+                # otherwise leak as orphans.
+                try:
+                    prefix = storage.job_key(user_id, p.job_id, "")
+                    for key in await asyncio.to_thread(storage.list_keys, prefix):
+                        await asyncio.to_thread(storage.delete_key, key)
+                except Exception:
+                    if p.metadata_r2_key:
+                        await asyncio.to_thread(storage.delete_key, p.metadata_r2_key)
             async with database.session() as s:
                 async with s.begin():
                     if items["videos"]:
