@@ -76,10 +76,12 @@ def _cooldown_ok(kind: str) -> bool:
 TELEGRAM_PREFIX = "OPENSHORTS ✂️ - "
 
 
-async def send_telegram(text: str):
+async def send_telegram(text: str, *, raise_errors: bool = False):
     """Push a plain-text message to the admin's Telegram chat. No-op if unset.
 
-    Best-effort: never raises — an alert failing must not break a webhook or job.
+    Best-effort by default: never raises — an alert failing must not break a
+    webhook or job. ``raise_errors=True`` is for callers with their own retry
+    (the daily digest), where swallowing the failure means losing the message.
     """
     if not settings.telegram_configured:
         return
@@ -90,8 +92,11 @@ async def send_telegram(text: str):
                    "text": TELEGRAM_PREFIX + text,
                    "disable_web_page_preview": True}
         async with httpx.AsyncClient(timeout=10) as client:
-            await client.post(url, json=payload)
+            resp = await client.post(url, json=payload)
+            resp.raise_for_status()
     except Exception as e:
+        if raise_errors:
+            raise
         print(f"⚠️  Telegram alert failed: {e}")
 
 
