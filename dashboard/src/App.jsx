@@ -309,6 +309,14 @@ function App() {
           : c)),
       };
     });
+    // The old durable R2 object is deleted when the recut is archived, so the
+    // stale URL would 404 as a fallback; drop it until the next refresh.
+    setDurableClips((prev) => {
+      if (!(index in prev)) return prev;
+      const next = { ...prev };
+      delete next[index];
+      return next;
+    });
     handleClipStateChange(index, { activeLayers: null, serverVideoFile: newFile });
   };
 

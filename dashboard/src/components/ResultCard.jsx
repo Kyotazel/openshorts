@@ -19,8 +19,18 @@ const PLATFORM_OPTIONS = [
     { value: 'youtube', label: 'youtube', icon: <Youtube size={16} /> },
 ];
 
+function clipDurationSeconds(clip) {
+    // A recut clip's start/end are the covering source range (segments may be
+    // non-contiguous or reordered); its real duration is the segment sum.
+    const segments = clip.recipe?.segments;
+    if (segments?.length) {
+        return segments.reduce((acc, s) => acc + (s.end - s.start), 0);
+    }
+    return clip.end && clip.start ? clip.end - clip.start : NaN;
+}
+
 function formatDuration(clip) {
-    const secs = clip.end && clip.start ? Math.floor(clip.end - clip.start) : NaN;
+    const secs = Math.floor(clipDurationSeconds(clip));
     if (!Number.isFinite(secs) || secs < 0) return null;
     return `${String(Math.floor(secs / 60)).padStart(2, '0')}:${String(secs % 60).padStart(2, '0')}`;
 }
@@ -126,7 +136,10 @@ export default function ResultCard({ clip, index, jobId, durableUrl, uploadPostK
     const [showTranslateModal, setShowTranslateModal] = useState(false);
     const [editError, setEditError] = useState(null);
 
-    const [clipDuration, setClipDuration] = useState(clip.end && clip.start ? clip.end - clip.start : 30);
+    const [clipDuration, setClipDuration] = useState(() => {
+        const secs = clipDurationSeconds(clip);
+        return Number.isFinite(secs) ? secs : 30;
+    });
 
     // Accumulate Remotion layers across operations. A reopened project restores
     // the layers persisted in its project state, so the next edit composes over
