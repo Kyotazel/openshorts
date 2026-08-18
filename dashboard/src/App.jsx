@@ -647,6 +647,14 @@ function App() {
       // that apiFetch attaches automatically.
       const headers = apiKey ? { 'X-Gemini-Key': apiKey } : {};
 
+      // Advanced generation controls: only sent when the user set them, so the
+      // default request stays byte-identical to the pre-feature one.
+      const advanced = {
+        target_clips: data.targetClips || null,
+        clip_min_seconds: data.clipMinSeconds || null,
+        clip_max_seconds: data.clipMaxSeconds || null,
+      };
+
       if (data.type === 'url') {
         headers['Content-Type'] = 'application/json';
         body = JSON.stringify({
@@ -654,12 +662,16 @@ function App() {
           acknowledged: !!data.acknowledged,
           output_format: data.outputFormat || 'auto',
           force_low_quality: forceLowQuality,
+          ...Object.fromEntries(Object.entries(advanced).filter(([, v]) => v != null)),
         });
       } else {
         const formData = new FormData();
         formData.append('file', data.payload);
         formData.append('acknowledged', data.acknowledged ? 'true' : 'false');
         formData.append('output_format', data.outputFormat || 'auto');
+        for (const [k, v] of Object.entries(advanced)) {
+          if (v != null) formData.append(k, v);
+        }
         body = formData;
       }
 

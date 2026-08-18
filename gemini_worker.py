@@ -9,7 +9,8 @@ from google import genai
 from google.genai import types as genai_types
 from pydantic import BaseModel
 
-from clip_selection import clip_count_targets, lookup_model_prices
+from clip_selection import (clip_count_targets, clip_duration_bounds,
+                            lookup_model_prices)
 
 load_dotenv()
 
@@ -63,7 +64,7 @@ class VisualResponse(BaseModel):
 
 VISUAL_PROMPT_TEMPLATE = """
 You are a senior short-form video editor. This video has NO speech/audio — judge
-it purely by what you SEE. Watch the whole thing and pick the 3–15 MOST engaging
+it purely by what you SEE. Watch the whole thing and pick the {min_clips}–{max_clips} MOST engaging
 visual moments for TikTok / Reels / Shorts (action, reveals, transformations,
 striking or funny shots, satisfying payoffs, dramatic movement).
 
@@ -71,8 +72,8 @@ TIME CONTRACT — STRICT:
 - Timestamps in ABSOLUTE SECONDS from the start (usable with ffmpeg -ss/-to).
 - Only numbers with up to 3 decimals (e.g. 0, 12.5, 47.250).
 - 0 <= start < end <= {video_duration}.
-- Each clip 15 to 60 seconds long. If the whole video is shorter than 15s,
-  return one clip spanning the full video.
+- Each clip {min_secs:g} to {max_secs:g} seconds long. If the whole video is
+  shorter than {min_secs:g}s, return one clip spanning the full video.
 - Cut on visual scene changes, never mid-motion.
 
 For each clip write catchy copy in {language} (a scroll-stopping hook, a TikTok
@@ -241,7 +242,7 @@ Choose the BEST short clips from these shortlisted candidate windows.
 
 CLIP RULES:
 - Return only valid JSON.
-- Each clip must be 15 to 60 seconds long, in absolute seconds from the start of the source video.
+- Each clip must be {min_secs:g} to {max_secs:g} seconds long, in absolute seconds from the start of the source video.
 - Stay within the candidate window boundaries.
 - THE 2-SECOND RULE: the clip MUST open on its strongest moment. If the first
   2 seconds would not stop a cold viewer from scrolling, move the start or skip the clip.
@@ -515,6 +516,7 @@ def main() -> int:
         # derived from it would be meaningless — and the score template has no
         # placeholder for one anyway.
         fmt["min_clips"], fmt["max_clips"] = clip_count_targets(len(payload.get("windows") or []))
+        fmt["min_secs"], fmt["max_secs"] = clip_duration_bounds()
     prompt = template.format(**fmt)
 
     _log(f"🤖 Gemini worker request: mode={args.mode} strategy={args.strategy} model={model_name} items={len(payload.get('windows', []))}")

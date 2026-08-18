@@ -23,7 +23,8 @@ from google.genai import types as genai_types
 
 import gemini_worker
 import layout_picker
-from clip_selection import build_transcript_windows, clip_count_targets, snap_clip_to_words
+from clip_selection import (build_transcript_windows, clip_count_targets,
+                            clip_duration_bounds, snap_clip_to_words)
 from ffmpeg_utils import (video_encode_args, audio_encode_args, QUALITY,
                           QUALITY_FAST, METADATA_SCRUB)
 from dotenv import load_dotenv
@@ -1275,9 +1276,11 @@ def get_viral_clips(transcript_result, video_duration):
         # --- Pass 2: detailed clip extraction on the shortlist ---
         payload = [{"id": w["id"], "start": w["start"], "end": w["end"], "text": w["text"]} for w in shortlist]
         min_clips, max_clips = clip_count_targets(len(shortlist))
+        min_secs, max_secs = clip_duration_bounds()
         prompt = gemini_worker.DETAIL_PROMPT_TEMPLATE.format(
             video_duration=video_duration, language=language,
             min_clips=min_clips, max_clips=max_clips,
+            min_secs=min_secs, max_secs=max_secs,
             windows_json=json.dumps(payload, ensure_ascii=False))
         detail, cost = _run_gemini_stage(client, model_name, prompt, gemini_worker.DetailResponse)
         if cost:
@@ -1286,7 +1289,8 @@ def get_viral_clips(transcript_result, video_duration):
         shorts = detail.get("shorts") or []
         # Snap each proposed clip onto real word boundaries (+ a bit of silence).
         for s in shorts:
-            ns, ne = snap_clip_to_words(s.get("start", 0), s.get("end", 0), words, video_duration)
+            ns, ne = snap_clip_to_words(s.get("start", 0), s.get("end", 0), words, video_duration,
+                                        min_duration=min_secs, max_duration=max_secs)
             s["start"], s["end"] = ns, ne
 
         # Aggregate cost across both passes.
@@ -1348,8 +1352,20 @@ def get_visual_clips(video_path, video_duration, language="en"):
                 return None
             time.sleep(2)
 
+        # The vision path has no scoring windows to derive a count from, so the
+        # env targets (user request) apply directly over the classic 3-15.
+        def _env_int(name, default):
+            try:
+                return max(1, int(os.environ.get(name, "")))
+            except ValueError:
+                return default
+        v_min_clips = _env_int("CLIP_TARGET_MIN", 3)
+        v_max_clips = max(v_min_clips, _env_int("CLIP_TARGET_MAX", 15))
+        v_min_secs, v_max_secs = clip_duration_bounds()
         prompt = gemini_worker.VISUAL_PROMPT_TEMPLATE.format(
-            video_duration=video_duration, language=language)
+            video_duration=video_duration, language=language,
+            min_clips=v_min_clips, max_clips=v_max_clips,
+            min_secs=v_min_secs, max_secs=v_max_secs)
         config = genai_types.GenerateContentConfig(
             response_mime_type="application/json",
             response_schema=gemini_worker.VisualResponse,

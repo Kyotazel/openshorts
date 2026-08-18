@@ -1461,7 +1461,10 @@ async def process_endpoint(
     layouts: Optional[str] = Form(None),
     force_low_quality: Optional[str] = Form(None),
     webhook_url: Optional[str] = Form(None),
-    webhook_secret: Optional[str] = Form(None)
+    webhook_secret: Optional[str] = Form(None),
+    target_clips: Optional[str] = Form(None),
+    clip_min_seconds: Optional[str] = Form(None),
+    clip_max_seconds: Optional[str] = Form(None)
 ):
     api_key = await resolve_gemini(request)
     if not api_key:
@@ -1481,6 +1484,9 @@ async def process_endpoint(
         layouts = body.get("layouts")
         webhook_url = body.get("webhook_url")
         webhook_secret = body.get("webhook_secret")
+        target_clips = body.get("target_clips")
+        clip_min_seconds = body.get("clip_min_seconds")
+        clip_max_seconds = body.get("clip_max_seconds")
 
     # Normalize output format (auto = keep pipeline default).
     if output_format not in ("vertical", "horizontal", "square"):
@@ -1558,6 +1564,41 @@ async def process_endpoint(
     env.update(chosen)
     if chosen:
         print(f"[layouts] job={job_id} enabled={sorted(chosen)}")
+
+    # Manual generation controls (discussion #65): optional clip-count target
+    # and duration band, forwarded to the selection prompts via the same env
+    # overrides the A/B harness already reads (clip_selection.py). All three
+    # are honest TARGETS, not guarantees — the model may return fewer clips
+    # when the material doesn't hold them. Bad values 400 instead of silently
+    # producing something the user didn't ask for.
+    def _gen_control(raw, name, lo, hi, integer=False):
+        if raw in (None, ""):
+            return None
+        try:
+            val = float(raw)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail=f"{name} must be a number")
+        if integer and val != int(val):
+            raise HTTPException(status_code=400, detail=f"{name} must be an integer")
+        if not (lo <= val <= hi):
+            raise HTTPException(status_code=400,
+                                detail=f"{name} must be between {lo:g} and {hi:g}")
+        return int(val) if integer else val
+
+    n_clips = _gen_control(target_clips, "target_clips", 1, 15, integer=True)
+    min_secs = _gen_control(clip_min_seconds, "clip_min_seconds", 5, 175)
+    max_secs = _gen_control(clip_max_seconds, "clip_max_seconds", 10, 180)
+    if min_secs is not None and max_secs is not None and max_secs < min_secs + 5:
+        raise HTTPException(status_code=400,
+                            detail="clip_max_seconds must be at least 5s above clip_min_seconds")
+    if n_clips is not None:
+        env["CLIP_TARGET_MIN"] = env["CLIP_TARGET_MAX"] = str(n_clips)
+    if min_secs is not None:
+        env["CLIP_MIN_SECONDS"] = str(min_secs)
+    if max_secs is not None:
+        env["CLIP_MAX_SECONDS"] = str(max_secs)
+    if n_clips is not None or min_secs is not None or max_secs is not None:
+        print(f"[gen-controls] job={job_id} clips={n_clips} band={min_secs}-{max_secs}")
 
     input_path = None
     if url:
