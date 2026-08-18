@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Download, Share2, Instagram, Youtube, Video, AlertCircle, Loader2, Copy, Check, Wand2, Type, Calendar, Languages, FileText, Link2 } from 'lucide-react';
+import { Download, Share2, Instagram, Youtube, Video, AlertCircle, Loader2, Copy, Check, Wand2, Type, Calendar, Languages, FileText, Link2, Scissors } from 'lucide-react';
 import { getApiUrl } from '../config';
 import { apiFetch } from '../lib/api';
 import SubtitleModal from './SubtitleModal';
@@ -19,13 +19,23 @@ const PLATFORM_OPTIONS = [
     { value: 'youtube', label: 'youtube', icon: <Youtube size={16} /> },
 ];
 
+function clipDurationSeconds(clip) {
+    // A recut clip's start/end are the covering source range (segments may be
+    // non-contiguous or reordered); its real duration is the segment sum.
+    const segments = clip.recipe?.segments;
+    if (segments?.length) {
+        return segments.reduce((acc, s) => acc + (s.end - s.start), 0);
+    }
+    return clip.end && clip.start ? clip.end - clip.start : NaN;
+}
+
 function formatDuration(clip) {
-    const secs = clip.end && clip.start ? Math.floor(clip.end - clip.start) : NaN;
+    const secs = Math.floor(clipDurationSeconds(clip));
     if (!Number.isFinite(secs) || secs < 0) return null;
     return `${String(Math.floor(secs / 60)).padStart(2, '0')}:${String(secs % 60).padStart(2, '0')}`;
 }
 
-export default function ResultCard({ clip, index, jobId, durableUrl, uploadPostKey, uploadUserId, geminiApiKey, elevenLabsKey, isManaged, onPlay, onPause, onBulkSubtitle, clipCount = 1, bulkProgress, initialState = null, onStateChange, connectedPlatforms = null, onConnectSocials }) {
+export default function ResultCard({ clip, index, jobId, durableUrl, uploadPostKey, uploadUserId, geminiApiKey, elevenLabsKey, isManaged, onPlay, onPause, onBulkSubtitle, clipCount = 1, bulkProgress, initialState = null, onStateChange, connectedPlatforms = null, onConnectSocials, onEditClip = null }) {
     const [showModal, setShowModal] = useState(false);
     const [showDescModal, setShowDescModal] = useState(false);
     const [showSubtitleModal, setShowSubtitleModal] = useState(false);
@@ -126,7 +136,10 @@ export default function ResultCard({ clip, index, jobId, durableUrl, uploadPostK
     const [showTranslateModal, setShowTranslateModal] = useState(false);
     const [editError, setEditError] = useState(null);
 
-    const [clipDuration, setClipDuration] = useState(clip.end && clip.start ? clip.end - clip.start : 30);
+    const [clipDuration, setClipDuration] = useState(() => {
+        const secs = clipDurationSeconds(clip);
+        return Number.isFinite(secs) ? secs : 30;
+    });
 
     // Accumulate Remotion layers across operations. A reopened project restores
     // the layers persisted in its project state, so the next edit composes over
@@ -709,6 +722,16 @@ export default function ResultCard({ clip, index, jobId, durableUrl, uploadPostK
 
                 {/* Actions Footer */}
                 <div className="grid grid-cols-2 gap-2 mt-auto pt-4 border-t border-rule">
+                    {onEditClip && (
+                        <button
+                            onClick={() => onEditClip(index)}
+                            className={QUIET_BTN}
+                        >
+                            <Scissors size={16} className="text-muted group-hover:text-brass transition-colors shrink-0" />
+                            edit clip
+                        </button>
+                    )}
+
                     <button
                         onClick={handleAutoEdit}
                         disabled={isEditing}
@@ -762,7 +785,7 @@ export default function ResultCard({ clip, index, jobId, durableUrl, uploadPostK
                             }
                             downloadClip();
                         }}
-                        className={QUIET_BTN}
+                        className={`${QUIET_BTN}${onEditClip ? ' col-span-2' : ''}`}
                     >
                         <Download size={16} className="text-muted group-hover:text-brass transition-colors shrink-0" /> download
                     </button>

@@ -67,6 +67,30 @@ def clip_count_targets(n_windows):
     return low, max(low, high)
 
 
+def clip_duration_bounds():
+    """The clip length band (seconds) the selection prompts and word-snapping
+    enforce. ``CLIP_MIN_SECONDS`` / ``CLIP_MAX_SECONDS`` override the classic
+    15-60 — set per job by /api/process when the user asks for a specific
+    length, or by hand for A/B runs. Values are clamped to platform-sane
+    limits and re-ordered so bad input degrades instead of breaking the job.
+    """
+    import os
+
+    def _read(name, default):
+        try:
+            return float(os.environ.get(name, ""))
+        except ValueError:
+            return default
+
+    lo = _read("CLIP_MIN_SECONDS", 15.0)
+    hi = _read("CLIP_MAX_SECONDS", 60.0)
+    lo = min(max(lo, 5.0), 175.0)
+    hi = min(max(hi, 10.0), 180.0)
+    if hi < lo + 5.0:  # keep a real band: degenerate ranges starve the model
+        hi = min(180.0, lo + 5.0)
+    return round(lo, 3), round(hi, 3)
+
+
 def compact_words(words, precision=2):
     """Round word timestamps for prompts — full float precision wastes tokens."""
     return [

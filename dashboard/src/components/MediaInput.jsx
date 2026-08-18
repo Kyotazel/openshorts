@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Link2, Upload, FileVideo, X, Info, Loader2 } from 'lucide-react';
+import { Link2, Upload, FileVideo, X, Info, Loader2, ChevronDown } from 'lucide-react';
 import { getApiUrl } from '../config';
 
 const SUPPORTED_PLATFORMS = [
@@ -16,6 +16,12 @@ export default function MediaInput({ onProcess, isProcessing }) {
     const [acknowledged, setAcknowledged] = useState(false);
     const [outputFormat, setOutputFormat] = useState('vertical'); // vertical | horizontal | square
     const [showInfo, setShowInfo] = useState(false);
+    // Advanced generation controls — empty string means "let the AI decide",
+    // which keeps the default pipeline behavior untouched.
+    const [showAdvanced, setShowAdvanced] = useState(false);
+    const [targetClips, setTargetClips] = useState('');
+    const [clipMinSeconds, setClipMinSeconds] = useState('');
+    const [clipMaxSeconds, setClipMaxSeconds] = useState('');
     const infoRef = useRef(null);
 
     // Close the compatibility popover on any outside click.
@@ -58,10 +64,15 @@ export default function MediaInput({ onProcess, isProcessing }) {
     const handleSubmit = (e) => {
         e.preventDefault();
         if (!acknowledged) return;
+        const advanced = {
+            targetClips: targetClips || null,
+            clipMinSeconds: clipMinSeconds || null,
+            clipMaxSeconds: clipMaxSeconds || null,
+        };
         if (mode === 'url' && url) {
-            onProcess({ type: 'url', payload: url, acknowledged: true, outputFormat });
+            onProcess({ type: 'url', payload: url, acknowledged: true, outputFormat, ...advanced });
         } else if (mode === 'file' && file) {
-            onProcess({ type: 'file', payload: file, acknowledged: true, outputFormat });
+            onProcess({ type: 'file', payload: file, acknowledged: true, outputFormat, ...advanced });
         }
     };
 
@@ -208,6 +219,59 @@ export default function MediaInput({ onProcess, isProcessing }) {
                             );
                         })}
                     </div>
+                </div>
+
+                {/* Advanced generation controls — collapsed by default; blank = AI decides */}
+                <div className="mt-4">
+                    <button
+                        type="button"
+                        onClick={() => setShowAdvanced((v) => !v)}
+                        className="flex items-center gap-1.5 text-xs text-muted hover:text-ink2 lowercase transition-colors"
+                    >
+                        <ChevronDown size={14} className={`transition-transform ${showAdvanced ? 'rotate-180' : ''}`} />
+                        advanced options
+                        {(targetClips || clipMinSeconds || clipMaxSeconds) && (
+                            <span className="text-brass">·</span>
+                        )}
+                    </button>
+                    {showAdvanced && (
+                        <div className="mt-3 grid grid-cols-3 gap-2 animate-fade">
+                            <div>
+                                <p className="eyebrow mb-1.5">clips to aim for</p>
+                                <input
+                                    type="number" min="1" max="15" step="1"
+                                    value={targetClips}
+                                    onChange={(e) => setTargetClips(e.target.value)}
+                                    placeholder="auto"
+                                    className="input-field"
+                                />
+                            </div>
+                            <div>
+                                <p className="eyebrow mb-1.5">min length (s)</p>
+                                <input
+                                    type="number" min="5" max="175" step="1"
+                                    value={clipMinSeconds}
+                                    onChange={(e) => setClipMinSeconds(e.target.value)}
+                                    placeholder="15"
+                                    className="input-field"
+                                />
+                            </div>
+                            <div>
+                                <p className="eyebrow mb-1.5">max length (s)</p>
+                                <input
+                                    type="number" min="10" max="180" step="1"
+                                    value={clipMaxSeconds}
+                                    onChange={(e) => setClipMaxSeconds(e.target.value)}
+                                    placeholder="60"
+                                    className="input-field"
+                                />
+                            </div>
+                            <p className="col-span-3 text-[11px] leading-relaxed text-muted">
+                                Targets, not guarantees: the AI returns fewer clips when the
+                                material doesn't hold them. Leave blank to let it decide.
+                            </p>
+                        </div>
+                    )}
                 </div>
 
                 <label className="flex items-start gap-2 mt-5 text-xs text-muted cursor-pointer select-none">

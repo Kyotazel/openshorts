@@ -23,6 +23,7 @@ from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
 from starlette.background import BackgroundTask
 from pydantic import BaseModel
 from s3_uploader import upload_job_artifacts, list_all_clips, upload_actor_to_s3, list_actor_gallery, upload_video_to_gallery, list_video_gallery
+import recut
 
 load_dotenv()
 
@@ -371,15 +372,20 @@ def _canonical_clip_file(output_dir, base_name, index):
     """The file to serve for clip ``index``, preferring a derived version.
 
     The pipeline writes the clean reframe as ``<base>_clip_<n>.mp4`` and any
-    post-processing (auto-captions, and /api/subtitle re-styles) as
-    ``subtitled_<ts>_<clean>.mp4``, keeping the original for re-styling. Every
-    place that rebuilds the canonical name from disk — restore after a restart,
-    the R2 upload, the download bundle — must therefore resolve to the newest
-    derived file, or clips silently lose their captions on a redeploy.
+    post-processing (auto-captions, /api/subtitle re-styles, and clip-editor
+    recuts) as ``subtitled_<ts>_<clean>.mp4`` / ``recut_<ts>_<clean>.mp4``,
+    keeping the original for re-styling. Every place that rebuilds the
+    canonical name from disk — restore after a restart, the R2 upload, the
+    download bundle — must therefore resolve to the newest derived file, or
+    clips silently lose their captions (or their recut) on a redeploy.
     """
     clean = f"{base_name}_clip_{index + 1}.mp4"
     try:
-        derived = glob.glob(os.path.join(output_dir, f"subtitled_*_{clean}"))
+        # subtitled_*_{clean} also matches subtitled_<ts>_recut_<ts>_{clean},
+        # i.e. a captioned recut; the bare recut_ pattern covers recuts that
+        # shipped uncaptioned.
+        derived = (glob.glob(os.path.join(output_dir, f"subtitled_*_{clean}"))
+                   + glob.glob(os.path.join(output_dir, f"recut_*_{clean}")))
     except Exception:
         derived = []
     if not derived:
@@ -425,6 +431,15 @@ def _reapply_captions(job_id, clip_index, video_path):
             return None
         clip = clips[clip_index]
         import main as _main
+        # A recut clip is a concatenation of source segments, so the flat
+        # start..end window is wrong for it — caption against the clip-relative
+        # remapped transcript instead (same trick /api/subtitle uses).
+        recipe_segments = (clip.get('recipe') or {}).get('segments')
+        if recipe_segments:
+            v_transcript = recut.virtual_transcript(transcript, recipe_segments)
+            return _main.auto_caption_clip(
+                video_path, v_transcript, 0.0,
+                recut.total_duration(recipe_segments))
         return _main.auto_caption_clip(video_path, transcript,
                                        clip['start'], clip['end'])
     except Exception as e:
@@ -1434,7 +1449,10 @@ async def process_endpoint(
     layouts: Optional[str] = Form(None),
     force_low_quality: Optional[str] = Form(None),
     webhook_url: Optional[str] = Form(None),
-    webhook_secret: Optional[str] = Form(None)
+    webhook_secret: Optional[str] = Form(None),
+    target_clips: Optional[str] = Form(None),
+    clip_min_seconds: Optional[str] = Form(None),
+    clip_max_seconds: Optional[str] = Form(None)
 ):
     api_key = await resolve_gemini(request)
     if not api_key:
@@ -1454,6 +1472,9 @@ async def process_endpoint(
         layouts = body.get("layouts")
         webhook_url = body.get("webhook_url")
         webhook_secret = body.get("webhook_secret")
+        target_clips = body.get("target_clips")
+        clip_min_seconds = body.get("clip_min_seconds")
+        clip_max_seconds = body.get("clip_max_seconds")
 
     # Normalize output format (auto = keep pipeline default).
     if output_format not in ("vertical", "horizontal", "square"):
@@ -1532,9 +1553,47 @@ async def process_endpoint(
     if chosen:
         print(f"[layouts] job={job_id} enabled={sorted(chosen)}")
 
+    # Manual generation controls (discussion #65): optional clip-count target
+    # and duration band, forwarded to the selection prompts via the same env
+    # overrides the A/B harness already reads (clip_selection.py). All three
+    # are honest TARGETS, not guarantees — the model may return fewer clips
+    # when the material doesn't hold them. Bad values 400 instead of silently
+    # producing something the user didn't ask for.
+    def _gen_control(raw, name, lo, hi, integer=False):
+        if raw in (None, ""):
+            return None
+        try:
+            val = float(raw)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail=f"{name} must be a number")
+        if integer and val != int(val):
+            raise HTTPException(status_code=400, detail=f"{name} must be an integer")
+        if not (lo <= val <= hi):
+            raise HTTPException(status_code=400,
+                                detail=f"{name} must be between {lo:g} and {hi:g}")
+        return int(val) if integer else val
+
+    n_clips = _gen_control(target_clips, "target_clips", 1, 15, integer=True)
+    min_secs = _gen_control(clip_min_seconds, "clip_min_seconds", 5, 175)
+    max_secs = _gen_control(clip_max_seconds, "clip_max_seconds", 10, 180)
+    if min_secs is not None and max_secs is not None and max_secs < min_secs + 5:
+        raise HTTPException(status_code=400,
+                            detail="clip_max_seconds must be at least 5s above clip_min_seconds")
+    if n_clips is not None:
+        env["CLIP_TARGET_MIN"] = env["CLIP_TARGET_MAX"] = str(n_clips)
+    if min_secs is not None:
+        env["CLIP_MIN_SECONDS"] = str(min_secs)
+    if max_secs is not None:
+        env["CLIP_MAX_SECONDS"] = str(max_secs)
+    if n_clips is not None or min_secs is not None or max_secs is not None:
+        print(f"[gen-controls] job={job_id} clips={n_clips} band={min_secs}-{max_secs}")
+
     input_path = None
     if url:
-        cmd.extend(["-u", url])
+        # Keep the downloaded source inside the job dir: the clip editor's
+        # re-render path cuts new segments from it, and it ages out with the
+        # rest of the job (retention window + OUTPUT_MAX_GB cap) either way.
+        cmd.extend(["-u", url, "--keep-original"])
     else:
         # Save uploaded file with size limit check.
         # basename() strips any path components from the client-supplied
@@ -1626,21 +1685,46 @@ async def get_status(job_id: str, request: Request):
     }
 
 
+def _locate_source(job_id: str):
+    """Find a job's source video on disk, or None.
+
+    Upload jobs keep it in uploads/{job_id}_*; URL jobs keep the download in
+    the job dir (--keep-original) under the name recorded as ``source_video``
+    in metadata.json. Either way it ages out with the normal retention caps.
+    """
+    matches = [
+        f for f in glob.glob(os.path.join(UPLOAD_DIR, f"{glob.escape(job_id)}_*"))
+        if not os.path.basename(f).startswith("thumb_")
+    ]
+    if matches:
+        return matches[0]
+    try:
+        meta_files = glob.glob(os.path.join(OUTPUT_DIR, job_id, "*_metadata.json"))
+        if meta_files:
+            with open(meta_files[0], 'r') as f:
+                name = json.load(f).get('source_video')
+            if name:
+                candidate = os.path.join(OUTPUT_DIR, job_id, os.path.basename(name))
+                if os.path.exists(candidate):
+                    return candidate
+    except Exception:
+        pass
+    return None
+
+
 @app.get("/api/source/{job_id}")
 async def get_source_video(job_id: str):
-    """Stream a job's original source video for the live-analysis preview.
+    """Stream a job's original source video for the live-analysis preview and
+    the clip editor's source monitor.
 
     Uploaded sources are blob URLs in the browser and don't survive a reload,
     so the recovered session points the preview here instead. Unauthenticated
     like the /videos mount — the UUID job_id is the capability.
     """
-    matches = [
-        f for f in glob.glob(os.path.join(UPLOAD_DIR, f"{job_id}_*"))
-        if not os.path.basename(f).startswith("thumb_")
-    ]
-    if not matches:
+    source_path = _locate_source(job_id)
+    if not source_path:
         raise HTTPException(status_code=404, detail="Source not found")
-    return FileResponse(matches[0], media_type="video/mp4")
+    return FileResponse(source_path, media_type="video/mp4")
 
 
 @app.get("/api/jobs/{job_id}/download-all")
@@ -2061,8 +2145,16 @@ async def get_clip_transcript(job_id: str, clip_index: int, request: Request):
         raise HTTPException(status_code=404, detail="Clip not found")
 
     clip_data = clips[clip_index]
-    clip_start = clip_data.get('start', 0)
-    clip_end = clip_data.get('end', 0)
+
+    # Recut clips are concatenations of source segments; remap the transcript
+    # onto the clip timeline so every consumer keeps its flat start..end logic.
+    recipe_segments = (clip_data.get('recipe') or {}).get('segments')
+    if recipe_segments:
+        transcript = recut.virtual_transcript(transcript, recipe_segments)
+        clip_start, clip_end = 0.0, recut.total_duration(recipe_segments)
+    else:
+        clip_start = clip_data.get('start', 0)
+        clip_end = clip_data.get('end', 0)
 
     # Extract words within clip range and convert to CaptionWord format
     captions = []
@@ -2082,6 +2174,284 @@ async def get_clip_transcript(job_id: str, clip_index: int, request: Request):
         "durationSec": duration_sec,
         "language": transcript.get('language', 'en'),
     }
+
+
+# --- Clip editor: EDL + re-render ---
+
+# How much transcript to send around the clip's segments — enough for the
+# editor's word-level trimming without shipping a whole podcast's words.
+EDL_WORD_CONTEXT_SECONDS = 45.0
+
+
+def _source_duration_seconds(path):
+    """Probe a video's duration; None when it can't be read."""
+    try:
+        import cv2
+        cap = cv2.VideoCapture(path)
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        frames = cap.get(cv2.CAP_PROP_FRAME_COUNT)
+        cap.release()
+        # OpenCV reports -1/-1 for files it can't read — a naive truthiness
+        # check would turn that into a phantom 1.0s duration.
+        if fps > 0 and frames > 0:
+            return round(frames / fps, 3)
+    except Exception:
+        pass
+    return None
+
+
+def _clip_recipe_parts(clip):
+    """(segments, canonical_range) for a clip — synthesized from the flat
+    start/end for clips that were never recut."""
+    recipe = clip.get('recipe') or {}
+    fallback = {"start": float(clip.get('start', 0) or 0),
+                "end": float(clip.get('end', 0) or 0)}
+    segments = recipe.get('segments') or [dict(fallback)]
+    canonical_range = recipe.get('canonical_range') or dict(fallback)
+    return segments, canonical_range
+
+
+@app.get("/api/clip/{job_id}/{clip_index}/edl")
+async def get_clip_edl(job_id: str, clip_index: int, request: Request):
+    """The clip's editable recipe: which source segments it was cut from, the
+    word timeline around them, and whether the source is still available for
+    cuts outside the original range."""
+    await _ensure_job_files(job_id, request)
+    if job_id not in jobs:
+        raise HTTPException(status_code=404, detail="Job not found")
+    job = jobs[job_id]
+    await _assert_job_owner(request, job)
+
+    output_dir = os.path.join(OUTPUT_DIR, job_id)
+    json_files = glob.glob(os.path.join(output_dir, "*_metadata.json"))
+    if not json_files:
+        raise HTTPException(status_code=404, detail="Metadata not found")
+    with open(json_files[0], 'r') as f:
+        data = json.load(f)
+
+    clips = data.get('shorts', [])
+    if clip_index < 0 or clip_index >= len(clips):
+        raise HTTPException(status_code=404, detail="Clip not found")
+    clip = clips[clip_index]
+
+    segments, canonical_range = _clip_recipe_parts(clip)
+    transcript = data.get('transcript') or {}
+    words = recut.transcript_words(transcript)
+
+    source_path = _locate_source(job_id)
+    source_duration = _source_duration_seconds(source_path) if source_path else None
+    duration_estimated = source_duration is None
+    if duration_estimated:
+        # Best remaining scale for the source track: the last spoken word or
+        # the furthest point any recipe touches.
+        candidates = [canonical_range['end']] + [s['end'] for s in segments]
+        if words:
+            candidates.append(words[-1]['e'])
+        source_duration = round(max(candidates), 3)
+
+    lo = min(s['start'] for s in segments) - EDL_WORD_CONTEXT_SECONDS
+    hi = max(s['end'] for s in segments) + EDL_WORD_CONTEXT_SECONDS
+    words_out = [
+        {"w": w["w"], "s": round(w["s"], 3), "e": round(w["e"], 3)}
+        for w in words if w["e"] >= lo and w["s"] <= hi
+    ]
+
+    current_file = (clip.get('video_url') or '').split('/')[-1]
+    if not current_file:
+        base_name = os.path.basename(json_files[0]).replace('_metadata.json', '')
+        current_file = _canonical_clip_file(output_dir, base_name, clip_index)
+
+    total = recut.total_duration(segments)
+    return {
+        "job_id": job_id,
+        "clip_index": clip_index,
+        "title": clip.get('video_title_for_youtube_short') or '',
+        "segments": segments,
+        "canonical_range": canonical_range,
+        "duration": total,
+        "current_file": current_file,
+        "has_captions": bool(re.match(r'^subtitled_\d+_', current_file)),
+        "words": words_out,
+        "source": {
+            "available": bool(source_path),
+            "url": f"/api/source/{job_id}" if source_path else None,
+            "duration": source_duration,
+            "duration_estimated": duration_estimated,
+        },
+        "limits": {
+            "max_segments": recut.MAX_SEGMENTS,
+            "min_segment_seconds": recut.MIN_SEGMENT_SECONDS,
+            "max_total_seconds": recut.MAX_TOTAL_SECONDS,
+        },
+        "rerender_minutes": (max(1, math.ceil(total / 60.0))
+                             if BILLING_ENABLED else 0),
+    }
+
+
+class RerenderSegment(BaseModel):
+    start: float
+    end: float
+
+
+class RerenderRequest(BaseModel):
+    job_id: str
+    clip_index: int
+    segments: List[RerenderSegment]
+    snap_to_words: bool = False
+    reapply_captions: bool = True
+
+
+# One lock per job (same pattern as _restore_locks): rerenders on the same job
+# share metadata.json and the canonical files, so they must not interleave.
+_rerender_locks: Dict[str, asyncio.Lock] = {}
+
+
+@app.post("/api/clip/rerender")
+async def rerender_clip(req: RerenderRequest, request: Request):
+    """Re-render a clip from an edited EDL (the clip editor's save button).
+
+    Two paths, chosen automatically:
+    - FAST: every segment stays inside the range the canonical clip was cut
+      from → recut straight from the already-reframed canonical file. No ML,
+      no source needed.
+    - SOURCE: a segment reaches outside → recut from the retained source and
+      re-reframe with the same engine the pipeline used. 409 when the source
+      already aged out.
+    """
+    await require_managed_entitlement(request)
+    await _ensure_job_files(req.job_id, request)
+    if req.job_id not in jobs:
+        raise HTTPException(status_code=404, detail="Job not found")
+    job = jobs[req.job_id]
+    await _assert_job_owner(request, job)
+
+    # Serialize rerenders per job: concurrent saves (easy for an MCP agent to
+    # produce) would otherwise race on the shared metadata.json
+    # read-modify-write below, with the last writer silently reverting the
+    # other clip's recipe/video_url.
+    lock = _rerender_locks.setdefault(req.job_id, asyncio.Lock())
+    async with lock:
+        return await _rerender_locked(req, request, job)
+
+
+async def _rerender_locked(req: RerenderRequest, request: Request, job):
+    output_dir = os.path.join(OUTPUT_DIR, req.job_id)
+    json_files = glob.glob(os.path.join(output_dir, "*_metadata.json"))
+    if not json_files:
+        raise HTTPException(status_code=404, detail="Metadata not found")
+    with open(json_files[0], 'r') as f:
+        data = json.load(f)
+
+    clips = data.get('shorts', [])
+    if req.clip_index < 0 or req.clip_index >= len(clips):
+        raise HTTPException(status_code=404, detail="Clip not found")
+    clip = clips[req.clip_index]
+    transcript = data.get('transcript') or {}
+
+    base_name = os.path.basename(json_files[0]).replace('_metadata.json', '')
+    clean_name = f"{base_name}_clip_{req.clip_index + 1}.mp4"
+    canonical_path = os.path.join(output_dir, clean_name)
+
+    _, canonical_range = _clip_recipe_parts(clip)
+    source_path = _locate_source(req.job_id)
+    source_duration = _source_duration_seconds(source_path) if source_path else None
+
+    try:
+        segments = recut.normalize_segments(
+            [{"start": s.start, "end": s.end} for s in req.segments],
+            source_duration)
+        if req.snap_to_words:
+            snap_bound = source_duration or max(s['end'] for s in segments)
+            segments = recut.snap_segments(segments, transcript, snap_bound)
+            if not source_path:
+                # Snapping trails into silence and may nudge a boundary past
+                # the canonical range; without a source the fast path is the
+                # only path, so clamp back instead of failing with a 409.
+                segments = [
+                    {"start": round(max(s['start'], canonical_range['start']), 3),
+                     "end": round(min(s['end'], canonical_range['end']), 3)}
+                    for s in segments]
+            # Re-validate after snapping/clamping: a segment fully outside the
+            # canonical range clamps to an inverted (end < start) window, and
+            # snapping can stretch the total past the cap. Without this it
+            # reaches ffmpeg and dies as a 500 instead of a clean 400.
+            segments = recut.normalize_segments(segments, source_duration)
+    except recut.RecutError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    fast = (os.path.exists(canonical_path)
+            and recut.within_range(segments, canonical_range['start'],
+                                   canonical_range['end']))
+    if not fast and not source_path:
+        raise HTTPException(
+            status_code=409,
+            detail="The source video is no longer on the server, so segments "
+                   "must stay within the original clip range.")
+
+    total = recut.total_duration(segments)
+    rerender_minutes = (max(1, math.ceil(total / 60.0))
+                        if BILLING_ENABLED else 0)
+    reservation_id = await reserve_managed_action(
+        request, rerender_minutes, req.job_id, "rerender")
+
+    v_transcript = (recut.virtual_transcript(transcript, segments)
+                    if req.reapply_captions else None)
+
+    def run_recut():
+        if fast:
+            return recut.perform_recut(
+                input_path=canonical_path,
+                segments=recut.rebase_segments(
+                    segments, canonical_range['start'], canonical_range['end']),
+                output_dir=output_dir, clean_name=clean_name,
+                reframe=False, captions_transcript=v_transcript)
+        return recut.perform_recut(
+            input_path=source_path, segments=segments,
+            output_dir=output_dir, clean_name=clean_name,
+            reframe=True, output_format=data.get('output_format', 'auto'),
+            watermark=bool(job.get('watermark')),
+            captions_transcript=v_transcript)
+
+    try:
+        loop = asyncio.get_event_loop()
+        served_name, _clean_recut_name = await loop.run_in_executor(None, run_recut)
+
+        new_video_url = f"/videos/{req.job_id}/{served_name}"
+        new_recipe = {"v": 1, "segments": segments,
+                      "canonical_range": canonical_range}
+        # Covering range, deliberately not segments[0]/segments[-1]: segments
+        # may legally be out of source order, and downstream consumers only
+        # need a sane positive window (the recipe is the real timeline).
+        new_start = min(s['start'] for s in segments)
+        new_end = max(s['end'] for s in segments)
+
+        updates = {'video_url': new_video_url, 'start': new_start,
+                   'end': new_end, 'recipe': new_recipe}
+        clip.update(updates)
+        data['shorts'] = clips
+        with open(json_files[0], 'w') as f:
+            json.dump(data, f, indent=2)
+        mem_clips = (job.get('result') or {}).get('clips') or []
+        if req.clip_index < len(mem_clips):
+            mem_clips[req.clip_index].update(updates)
+
+        _archive_clip_edit_bg(req.job_id, req.clip_index, served_name)
+        if reservation_id:
+            await _metering.commit_reservation(reservation_id)
+        return {
+            "success": True,
+            "new_video_url": new_video_url,
+            "recipe": new_recipe,
+            "start": new_start,
+            "end": new_end,
+            "duration": total,
+            "render_path": "fast" if fast else "source",
+        }
+    except Exception as e:
+        if reservation_id:
+            await _metering.release_reservation(reservation_id)
+        print(f"❌ Rerender Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # --- Remotion Render Proxy ---
@@ -2272,7 +2642,19 @@ async def add_subtitles(req: SubtitleRequest, request: Request):
         raise HTTPException(status_code=404, detail="Clip not found")
         
     clip_data = clips[req.clip_index]
-    
+
+    # Recut clips concatenate several source segments, so their caption window
+    # is not the flat start..end range — restyle against the clip-relative
+    # remapped transcript instead.
+    recipe_segments = (clip_data.get('recipe') or {}).get('segments')
+    if recipe_segments:
+        sub_transcript = recut.virtual_transcript(transcript, recipe_segments)
+        sub_start, sub_end = 0.0, recut.total_duration(recipe_segments)
+    else:
+        sub_transcript = transcript
+        sub_start = clip_data.get('start', 0)
+        sub_end = clip_data.get('end', 0)
+
     # Video Path
     if req.input_filename:
         # Use chained file
@@ -2344,9 +2726,9 @@ async def add_subtitles(req: SubtitleRequest, request: Request):
             loop = asyncio.get_event_loop()
             success = await loop.run_in_executor(None, run_transcribe_srt)
         elif is_karaoke:
-            success = generate_ass(transcript, clip_data['start'], clip_data['end'], srt_path, **karaoke_opts)
+            success = generate_ass(sub_transcript, sub_start, sub_end, srt_path, **karaoke_opts)
         else:
-            success = generate_srt(transcript, clip_data['start'], clip_data['end'], srt_path)
+            success = generate_srt(sub_transcript, sub_start, sub_end, srt_path)
 
         if not success:
              raise HTTPException(status_code=400, detail="No words found for this clip range.")

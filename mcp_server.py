@@ -95,6 +95,20 @@ TOOLS = [
                     "type": "boolean",
                     "description": "Set true to proceed after a needs_confirmation low-resolution warning.",
                 },
+                "target_clips": {
+                    "type": "integer", "minimum": 1, "maximum": 15,
+                    "description": "How many clips to aim for. A target, not a guarantee: "
+                                   "fewer come back when the material doesn't hold them. "
+                                   "Default: the AI decides (usually 2-6).",
+                },
+                "clip_min_seconds": {
+                    "type": "number", "minimum": 5, "maximum": 175,
+                    "description": "Minimum clip length in seconds (default 15).",
+                },
+                "clip_max_seconds": {
+                    "type": "number", "minimum": 10, "maximum": 180,
+                    "description": "Maximum clip length in seconds (default 60). Must be ≥ 5s above the minimum.",
+                },
             },
             "required": ["source_url", "confirm_rights"],
         },
@@ -166,6 +180,48 @@ TOOLS = [
         },
     },
     {
+        "name": "recut_clip",
+        "title": "Re-cut a clip from an edited segment list",
+        "description": (
+            "Re-render one clip from a new list of source-video segments (the "
+            "same engine behind the dashboard's clip editor). Times are seconds "
+            "in the ORIGINAL source video; segments are concatenated in the "
+            "given order, so you can trim, extend, drop a dead moment in the "
+            "middle, or reorder. Segments inside the clip's original range "
+            "re-render in seconds; going outside needs the retained source "
+            "video and re-runs the reframe engine."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "job_id": {"type": "string"},
+                "clip_index": {"type": "integer", "description": "0-based index from list_clips."},
+                "segments": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "start": {"type": "number", "description": "Seconds in the source video."},
+                            "end": {"type": "number", "description": "Seconds in the source video."},
+                        },
+                        "required": ["start", "end"],
+                    },
+                    "minItems": 1,
+                    "description": "Ordered source segments the new clip is made of.",
+                },
+                "snap_to_words": {
+                    "type": "boolean",
+                    "description": "Snap each boundary onto transcript word boundaries (recommended).",
+                },
+                "reapply_captions": {
+                    "type": "boolean",
+                    "description": "Burn default captions back on after the recut (default true).",
+                },
+            },
+            "required": ["job_id", "clip_index", "segments"],
+        },
+    },
+    {
         "name": "publish_clip",
         "title": "Publish a clip to social platforms",
         "description": (
@@ -228,6 +284,9 @@ async def _tool_process_video(client, args):
         "webhook_url": args.get("webhook_url"),
         "webhook_secret": args.get("webhook_secret"),
     }
+    for k in ("target_clips", "clip_min_seconds", "clip_max_seconds"):
+        if args.get(k) is not None:
+            body[k] = args[k]
     resp = await client.post("/api/process", json=body)
     if resp.status_code >= 400:
         return _api_error(resp), True
@@ -311,6 +370,18 @@ async def _tool_add_subtitles(client, args):
     return resp.json(), False
 
 
+async def _tool_recut_clip(client, args):
+    body = {"job_id": args["job_id"], "clip_index": args["clip_index"],
+            "segments": args["segments"]}
+    for k in ("snap_to_words", "reapply_captions"):
+        if args.get(k) is not None:
+            body[k] = args[k]
+    resp = await client.post("/api/clip/rerender", json=body)
+    if resp.status_code >= 400:
+        return _api_error(resp), True
+    return resp.json(), False
+
+
 async def _tool_publish_clip(client, args):
     body = {"job_id": args["job_id"], "clip_index": args["clip_index"],
             "platforms": args["platforms"]}
@@ -329,6 +400,7 @@ _TOOL_IMPLS = {
     "list_clips": _tool_list_clips,
     "get_quota": _tool_get_quota,
     "add_subtitles": _tool_add_subtitles,
+    "recut_clip": _tool_recut_clip,
     "publish_clip": _tool_publish_clip,
 }
 
