@@ -2224,9 +2224,10 @@ async def get_clip_transcript(job_id: str, clip_index: int, request: Request):
 
 # --- Clip editor: EDL + re-render ---
 
-# How much transcript to send around the clip's segments — enough for the
-# editor's word-level trimming without shipping a whole podcast's words.
-EDL_WORD_CONTEXT_SECONDS = 45.0
+# The editor ships the WHOLE source transcript, not a window around the clip:
+# the point of the source track is extending a cut into material the clip never
+# covered, and you cannot pick a new in-point from words you were not sent.
+# Cost is about 7 KB of JSON per minute of speech, fetched once per editor open.
 
 
 def _source_duration_seconds(path):
@@ -2295,11 +2296,9 @@ async def get_clip_edl(job_id: str, clip_index: int, request: Request):
             candidates.append(words[-1]['e'])
         source_duration = round(max(candidates), 3)
 
-    lo = min(s['start'] for s in segments) - EDL_WORD_CONTEXT_SECONDS
-    hi = max(s['end'] for s in segments) + EDL_WORD_CONTEXT_SECONDS
     words_out = [
         {"w": w["w"], "s": round(w["s"], 3), "e": round(w["e"], 3)}
-        for w in words if w["e"] >= lo and w["s"] <= hi
+        for w in words
     ]
 
     current_file = (clip.get('video_url') or '').split('/')[-1]
