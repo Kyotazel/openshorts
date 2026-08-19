@@ -20,10 +20,12 @@ const SIZE_SCALE: Record<string, number> = {
   L: 1.3,
 };
 
+// Percentages must match hooks.py's overlay_y math (top 20% / bottom 70%),
+// or the preview drifts from what the server path renders.
 const POSITION_STYLE: Record<string, React.CSSProperties> = {
-  top: { top: "18%", bottom: "auto" },
+  top: { top: "20%", bottom: "auto" },
   center: { top: "50%", bottom: "auto", transform: "translateY(-50%)" },
-  bottom: { top: "68%", bottom: "auto" },
+  bottom: { top: "70%", bottom: "auto" },
 };
 
 // Must mirror hooks.py HOOK_STYLES (the server-side FFmpeg fallback).

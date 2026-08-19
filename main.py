@@ -72,7 +72,7 @@ OUTPUT — RETURN ONLY VALID JSON (no markdown, no comments). Order clips by pre
       "video_description_for_tiktok": "<description for TikTok oriented to get views>",
       "video_description_for_instagram": "<description for Instagram oriented to get views>",
       "video_title_for_youtube_short": "<title for YouTube Short oriented to get views 100 chars max>",
-      "viral_hook_text": "<SHORT punchy text overlay (max 10 words). MUST BE IN THE SAME LANGUAGE AS THE VIDEO TRANSCRIPT. Examples: 'POV: You realized...', 'Did you know?', 'Stop doing this!'>"
+      "viral_hook_text": "<SHORT punchy text overlay (max 10 words) with 1-2 fitting emojis. MUST BE IN THE SAME LANGUAGE AS THE VIDEO TRANSCRIPT. Examples: 'POV: You realized... 😳', 'Did you know? 🤯', 'Stop doing this! 🚫'>"
     }}
   ]
 }}
@@ -882,6 +882,47 @@ def auto_caption_clip(clip_path, transcript, clip_start, clip_end):
         return None
 
 
+def auto_hook_clip(clip_path, clip):
+    """Burn the clip's Gemini hook text into the finished clip (AUTO_HOOK=1).
+
+    In-place on the canonical clip file, BEFORE the watermark and captions
+    layers, so every existing derived-name convention (subtitled_/recut_
+    walk-backs, R2 archive, restore after redeploy) keeps working untouched.
+
+    Returns the burned hook config dict, or None when skipped or failed — a
+    hook problem must never cost the user the clip itself (same fail-open
+    contract as auto_caption_clip)."""
+    text = (clip.get('viral_hook_text') or '').strip()
+    if not text:
+        return None
+    style = os.environ.get("AUTO_HOOK_STYLE", "classic")
+    try:
+        seconds = float(os.environ.get("AUTO_HOOK_SECONDS", "5"))
+    except ValueError:
+        seconds = 5.0
+    try:
+        from hooks import add_hook_to_video, HOOK_STYLES
+        if style not in HOOK_STYLES:
+            style = "classic"
+        output_dir = os.path.dirname(clip_path)
+        tmp_path = os.path.join(
+            output_dir, f"temp_autohook_{uuid.uuid4().hex[:8]}.mp4")
+        try:
+            add_hook_to_video(clip_path, text, tmp_path, position="top",
+                              duration=seconds, style=style)
+            os.replace(tmp_path, clip_path)
+        finally:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+        print(f"   🪝 Hook burned ({style}, {seconds:g}s): {text}")
+        return {"text": text, "style": style, "position": "top",
+                "duration_seconds": seconds}
+    except Exception as e:
+        print(f"   ⚠️ Auto-hook failed ({type(e).__name__}: {e}) — "
+              f"delivering the clip without it.")
+        return None
+
+
 def render_clip(input_video, final_output_video, output_format="auto",
                 force_strategy=None, crop_overrides=None):
     """Route a cut clip through the right renderer for the chosen output format.
@@ -1586,6 +1627,13 @@ if __name__ == '__main__':
                     subprocess.run(cut_command, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
 
                     success = render_clip(clip_temp_path, clip_final_path, output_format)
+                    # Hook first, under the watermark, and captions always
+                    # last. Each worker writes only its own clip dict, so the
+                    # re-dump after the pool is race-free.
+                    if success and os.environ.get("AUTO_HOOK") == "1":
+                        burned = auto_hook_clip(clip_final_path, clip)
+                        if burned:
+                            clip['auto_hook'] = burned
                     if success and os.environ.get("WATERMARK") == "1":
                         apply_watermark(clip_final_path)
                     if success:
@@ -1609,6 +1657,12 @@ if __name__ == '__main__':
                         future.result()
                     except Exception as e:
                         print(f"   ❌ Clip {i+1} failed: {type(e).__name__}: {e}")
+
+            # Persist per-clip render results added by the workers (auto_hook)
+            # so the editor can see what is already burned into each clip.
+            if any('auto_hook' in c for c in shorts):
+                with open(metadata_file, 'w') as f:
+                    json.dump(clips_data, f, indent=2)
 
     # Clean up original if requested
     if args.url and not args.keep_original and os.path.exists(input_video):

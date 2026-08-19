@@ -33,12 +33,19 @@ const SIZE_OPTIONS = [
     { value: 'L', label: 'Large' },
 ];
 
-export default function HookModal({ isOpen, onClose, onGenerate, isProcessing, videoUrl, initialText, durationInSeconds, existingSubtitles }) {
+// Last-used hook settings, restored on the next open (style always reset to
+// classic otherwise, which users read as the picker being broken).
+function loadHookPrefs() {
+    try { return JSON.parse(localStorage.getItem('os_hook_prefs')) || {}; } catch { return {}; }
+}
+
+export default function HookModal({ isOpen, onClose, onGenerate, isProcessing, videoUrl, initialText, durationInSeconds, existingSubtitles, hasCaptions, serverRender, burnedHook }) {
+    const prefs = loadHookPrefs();
     const [text, setText] = useState(initialText || 'POV: You are using the viral hook feature');
-    const [position, setPosition] = useState('top');
-    const [size, setSize] = useState('M');
-    const [style, setStyle] = useState('classic');
-    const [entranceAnimation, setEntranceAnimation] = useState('spring');
+    const [position, setPosition] = useState(prefs.position || 'top');
+    const [size, setSize] = useState(prefs.size || 'M');
+    const [style, setStyle] = useState(prefs.style || 'classic');
+    const [entranceAnimation, setEntranceAnimation] = useState(prefs.entranceAnimation || 'spring');
     const [displayDuration, setDisplayDuration] = useState(5);
 
     if (!isOpen) return null;
@@ -159,6 +166,12 @@ export default function HookModal({ isOpen, onClose, onGenerate, isProcessing, v
                                 onChange={setPosition}
                                 size="sm"
                             />
+                            {position === 'bottom' && hasCaptions && (
+                                <p className="text-[11px] text-warn mt-1.5 leading-relaxed">
+                                    This clip has captions near the bottom — the hook may
+                                    overlap them (and TikTok's UI). Top is the safe zone.
+                                </p>
+                            )}
                         </div>
 
                         {/* Size Control */}
@@ -173,7 +186,7 @@ export default function HookModal({ isOpen, onClose, onGenerate, isProcessing, v
                         </div>
 
                         {/* Entrance Animation (new) */}
-                        <div>
+                        <div className={serverRender ? 'opacity-50' : ''}>
                             <p className="eyebrow mb-2">Entrance</p>
                             <SegmentedControl
                                 options={ENTRANCE_OPTIONS}
@@ -182,6 +195,12 @@ export default function HookModal({ isOpen, onClose, onGenerate, isProcessing, v
                                 columns={2}
                                 size="sm"
                             />
+                            {serverRender && (
+                                <p className="text-[11px] text-muted mt-1.5 leading-relaxed">
+                                    This clip re-renders on the server, where the hook is
+                                    static — the entrance animation won't apply.
+                                </p>
+                            )}
                         </div>
 
                         {/* Display Duration (new) */}
@@ -204,6 +223,13 @@ export default function HookModal({ isOpen, onClose, onGenerate, isProcessing, v
                             </div>
                         </div>
 
+                        {burnedHook && (
+                            <div className="p-3 border border-rule rounded-input text-xs text-warn">
+                                This clip already has a hook burned in ("{burnedHook}").
+                                Adding another will stack on top of it.
+                            </div>
+                        )}
+
                         <div className="p-3 border border-rule rounded-input text-xs text-muted">
                             Tip: keep it short and punchy. Using "POV:" or specific questions works best for retention.
                         </div>
@@ -214,11 +240,18 @@ export default function HookModal({ isOpen, onClose, onGenerate, isProcessing, v
                             cancel
                         </button>
                         <button
-                            onClick={() => onGenerate({
-                                text, position, size, style,
-                                // Remotion data
-                                remotion: hookConfig,
-                            })}
+                            onClick={() => {
+                                try {
+                                    localStorage.setItem('os_hook_prefs', JSON.stringify({
+                                        style, position, size, entranceAnimation,
+                                    }));
+                                } catch { /* ignore */ }
+                                onGenerate({
+                                    text, position, size, style,
+                                    // Remotion data
+                                    remotion: hookConfig,
+                                });
+                            }}
                             disabled={isProcessing || !text.trim()}
                             className="btn-primary flex-1"
                         >

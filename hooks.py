@@ -37,28 +37,41 @@ _EMOJI_RE = re.compile(
     "]+"
 )
 
-# Emoji-capable fonts, probed at runtime (Windows, WSL, Linux/Docker).
+# Emoji-capable fonts, probed at runtime (Windows, WSL, Linux/Docker, macOS).
 _EMOJI_FONT_CANDIDATES = [
     "C:\\Windows\\Fonts\\seguiemj.ttf",
     "/mnt/c/Windows/Fonts/seguiemj.ttf",
     "/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf",
     "/usr/share/fonts/noto-emoji/NotoColorEmoji.ttf",
+    "/System/Library/Fonts/Apple Color Emoji.ttc",
 ]
 
 
-def _load_emoji_font(font_size):
-    """Return an emoji-capable font at the requested size, or None.
+# Bitmap strike sizes color-emoji fonts ship with. NotoColorEmoji (the font
+# the Docker image installs) ONLY loads at its strike size — asking for an
+# arbitrary size raises "invalid pixel size" — so glyphs are rendered at the
+# native size and rescaled at draw time.
+_EMOJI_BITMAP_SIZES = [109, 128, 136, 160, 96, 72, 64, 32]
 
-    Fonts that only support a fixed bitmap size (e.g. NotoColorEmoji) fail to
-    load at arbitrary sizes; those are treated as unavailable rather than
-    breaking the layout with wrongly-sized glyphs."""
+
+def _load_emoji_font(font_size):
+    """Return (font, native_size) for an emoji-capable font, or None.
+
+    native_size == font_size for scalable fonts (Segoe UI Emoji); for
+    fixed-bitmap fonts (NotoColorEmoji) it is the strike size the font
+    actually loaded at, and the renderer scales glyphs down from it."""
     for path in _EMOJI_FONT_CANDIDATES:
         if not os.path.exists(path):
             continue
         try:
-            return ImageFont.truetype(path, font_size)
+            return ImageFont.truetype(path, font_size), font_size
         except Exception:
-            continue
+            pass
+        for native in _EMOJI_BITMAP_SIZES:
+            try:
+                return ImageFont.truetype(path, native), native
+            except Exception:
+                continue
     return None
 
 
@@ -76,28 +89,63 @@ def _split_emoji_runs(text):
     return runs
 
 
+def _emoji_scale(font, emoji_font):
+    """Draw-time scale factor from the emoji font's native size to the text
+    size. 1.0 for scalable emoji fonts; < 1 for fixed-bitmap strikes."""
+    efont, native = emoji_font
+    target = getattr(font, "size", native)
+    return target / float(native) if native else 1.0
+
+
 def _measure_width(draw, text, font, emoji_font):
-    """Pixel width of a line, measuring emoji runs with the emoji font."""
+    """Pixel width of a line, measuring emoji runs with the emoji font.
+
+    emoji_font is the (font, native_size) pair from _load_emoji_font, or None."""
     width = 0.0
     for is_emoji, chunk in _split_emoji_runs(text):
-        use_font = emoji_font if (is_emoji and emoji_font) else font
-        width += draw.textlength(chunk, font=use_font)
+        if is_emoji and emoji_font:
+            width += (draw.textlength(chunk, font=emoji_font[0])
+                      * _emoji_scale(font, emoji_font))
+        else:
+            width += draw.textlength(chunk, font=font)
     return width
 
 
-def _draw_mixed(draw, xy, text, font, emoji_font, fill, outline=None):
-    """Draw a line, rendering emoji runs with the emoji font (in color if
-    supported). outline: optional (color, px) stroke drawn under the text."""
+def _render_emoji_chunk(chunk, emoji_font, scale, fill):
+    """Rasterize an emoji run at the font's native size, scaled to the text
+    size. Returns an RGBA image ready to alpha-composite, or None."""
+    efont, native = emoji_font
+    probe = ImageDraw.Draw(Image.new('RGBA', (1, 1)))
+    w = int(probe.textlength(chunk, font=efont))
+    if w <= 0:
+        return None
+    # Emoji glyphs can overshoot the em box slightly; 1.3x covers it.
+    tmp = Image.new('RGBA', (w, int(native * 1.3)), (0, 0, 0, 0))
+    d = ImageDraw.Draw(tmp)
+    try:
+        d.text((0, 0), chunk, font=efont, embedded_color=True)
+    except TypeError:
+        d.text((0, 0), chunk, font=efont, fill=fill)
+    if scale == 1.0:
+        return tmp
+    return tmp.resize((max(int(w * scale), 1), max(int(tmp.height * scale), 1)),
+                      Image.LANCZOS)
+
+
+def _draw_mixed(img, draw, xy, text, font, emoji_font, fill, outline=None):
+    """Draw a line onto img, rendering emoji runs with the emoji font (in
+    color if supported, rescaled when the font is a fixed-size bitmap).
+    outline: optional (color, px) stroke drawn under the text."""
     x, y = xy
     stroke_w = outline[1] if outline else 0
     stroke_fill = outline[0] if outline else None
     for is_emoji, chunk in _split_emoji_runs(text):
         if is_emoji and emoji_font:
-            try:
-                draw.text((x, y), chunk, font=emoji_font, embedded_color=True)
-            except TypeError:
-                draw.text((x, y), chunk, font=emoji_font, fill=fill)
-            x += draw.textlength(chunk, font=emoji_font)
+            scale = _emoji_scale(font, emoji_font)
+            rendered = _render_emoji_chunk(chunk, emoji_font, scale, fill)
+            if rendered is not None:
+                img.alpha_composite(rendered, (int(x), int(y)))
+                x += draw.textlength(chunk, font=emoji_font[0]) * scale
         else:
             if stroke_w:
                 draw.text((x, y), chunk, font=font, fill=fill,
@@ -314,7 +362,7 @@ def create_hook_image(text, target_width, output_image_path="hook_overlay.png", 
         x = 20 + int(box_width - line_w) // 2
 
         # Draw text in the style's color (emoji runs use the emoji font)
-        _draw_mixed(draw_final, (x, current_y), line, font, emoji_font,
+        _draw_mixed(img, draw_final, (x, current_y), line, font, emoji_font,
                     fill=text_fill, outline=outline)
 
         current_y += line_h + line_spacing

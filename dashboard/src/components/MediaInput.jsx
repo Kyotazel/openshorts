@@ -22,6 +22,14 @@ export default function MediaInput({ onProcess, isProcessing }) {
     const [targetClips, setTargetClips] = useState('');
     const [clipMinSeconds, setClipMinSeconds] = useState('');
     const [clipMaxSeconds, setClipMaxSeconds] = useState('');
+    // Auto-hook: burn the AI hook text into every clip. On by default; the
+    // choice persists so turning it off sticks across sessions.
+    const [autoHook, setAutoHook] = useState(() => {
+        try { return localStorage.getItem('os_auto_hook') !== '0'; } catch { return true; }
+    });
+    const [autoHookStyle, setAutoHookStyle] = useState(() => {
+        try { return localStorage.getItem('os_auto_hook_style') || 'classic'; } catch { return 'classic'; }
+    });
     const infoRef = useRef(null);
 
     // Close the compatibility popover on any outside click.
@@ -68,7 +76,13 @@ export default function MediaInput({ onProcess, isProcessing }) {
             targetClips: targetClips || null,
             clipMinSeconds: clipMinSeconds || null,
             clipMaxSeconds: clipMaxSeconds || null,
+            autoHook,
+            autoHookStyle,
         };
+        try {
+            localStorage.setItem('os_auto_hook', autoHook ? '1' : '0');
+            localStorage.setItem('os_auto_hook_style', autoHookStyle);
+        } catch { /* ignore */ }
         if (mode === 'url' && url) {
             onProcess({ type: 'url', payload: url, acknowledged: true, outputFormat, ...advanced });
         } else if (mode === 'file' && file) {
@@ -230,7 +244,7 @@ export default function MediaInput({ onProcess, isProcessing }) {
                     >
                         <ChevronDown size={14} className={`transition-transform ${showAdvanced ? 'rotate-180' : ''}`} />
                         advanced options
-                        {(targetClips || clipMinSeconds || clipMaxSeconds) && (
+                        {(targetClips || clipMinSeconds || clipMaxSeconds || !autoHook) && (
                             <span className="text-brass">·</span>
                         )}
                     </button>
@@ -270,6 +284,31 @@ export default function MediaInput({ onProcess, isProcessing }) {
                                 Targets, not guarantees: the AI returns fewer clips when the
                                 material doesn't hold them. Leave blank to let it decide.
                             </p>
+                            <div className="col-span-3 flex items-center justify-between gap-3 pt-1 border-t border-rule">
+                                <label className="flex items-center gap-2 text-xs text-ink2 cursor-pointer select-none">
+                                    <input
+                                        type="checkbox"
+                                        checked={autoHook}
+                                        onChange={(e) => setAutoHook(e.target.checked)}
+                                        className="accent-[var(--color-accent)] cursor-pointer"
+                                    />
+                                    auto hook titles on clips
+                                </label>
+                                {autoHook && (
+                                    <select
+                                        value={autoHookStyle}
+                                        onChange={(e) => setAutoHookStyle(e.target.value)}
+                                        className="input-field !w-auto text-xs py-1.5"
+                                    >
+                                        <option value="classic">Classic</option>
+                                        <option value="dark">Dark</option>
+                                        <option value="yellow">Yellow</option>
+                                        <option value="red">Red</option>
+                                        <option value="outline">Outline</option>
+                                        <option value="outline_yellow">Outline+</option>
+                                    </select>
+                                )}
+                            </div>
                         </div>
                     )}
                 </div>

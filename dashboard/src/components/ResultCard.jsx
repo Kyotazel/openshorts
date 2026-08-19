@@ -1004,6 +1004,9 @@ export default function ResultCard({ clip, index, jobId, durableUrl, uploadPostK
                 initialText={clip.viral_hook_text}
                 durationInSeconds={clip.end && clip.start ? clip.end - clip.start : 30}
                 existingSubtitles={activeLayers.subtitles}
+                hasCaptions={!!activeLayers.subtitles || /(^|_)subtitled_/.test(serverVideoFile || '')}
+                serverRender={hasServerBurns}
+                burnedHook={clip.auto_hook?.text}
             />
 
             <TranslateModal

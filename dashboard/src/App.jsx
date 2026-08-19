@@ -655,6 +655,10 @@ function App() {
         target_clips: data.targetClips || null,
         clip_min_seconds: data.clipMinSeconds || null,
         clip_max_seconds: data.clipMaxSeconds || null,
+        // Sent explicitly both ways: absent means off for raw API callers,
+        // but the dashboard always states the user's choice.
+        auto_hook: data.autoHook ? '1' : '0',
+        auto_hook_style: data.autoHook ? (data.autoHookStyle || 'classic') : null,
       };
 
       if (data.type === 'url') {

@@ -1452,7 +1452,9 @@ async def process_endpoint(
     webhook_secret: Optional[str] = Form(None),
     target_clips: Optional[str] = Form(None),
     clip_min_seconds: Optional[str] = Form(None),
-    clip_max_seconds: Optional[str] = Form(None)
+    clip_max_seconds: Optional[str] = Form(None),
+    auto_hook: Optional[str] = Form(None),
+    auto_hook_style: Optional[str] = Form(None)
 ):
     api_key = await resolve_gemini(request)
     if not api_key:
@@ -1475,6 +1477,8 @@ async def process_endpoint(
         target_clips = body.get("target_clips")
         clip_min_seconds = body.get("clip_min_seconds")
         clip_max_seconds = body.get("clip_max_seconds")
+        auto_hook = body.get("auto_hook")
+        auto_hook_style = body.get("auto_hook_style")
 
     # Normalize output format (auto = keep pipeline default).
     if output_format not in ("vertical", "horizontal", "square"):
@@ -1552,6 +1556,16 @@ async def process_endpoint(
     env.update(chosen)
     if chosen:
         print(f"[layouts] job={job_id} enabled={sorted(chosen)}")
+
+    # Auto-hook: burn each clip's Gemini hook text during the render. Off when
+    # the field is absent, so API/MCP/webhook callers keep their old output
+    # byte-for-byte; the dashboard sends an explicit value either way.
+    if str(auto_hook).lower() in ("1", "true", "yes"):
+        env["AUTO_HOOK"] = "1"
+        from hooks import HOOK_STYLES
+        if auto_hook_style in HOOK_STYLES:
+            env["AUTO_HOOK_STYLE"] = auto_hook_style
+        print(f"[auto-hook] job={job_id} style={env.get('AUTO_HOOK_STYLE', 'classic')}")
 
     # Manual generation controls (discussion #65): optional clip-count target
     # and duration band, forwarded to the selection prompts via the same env
