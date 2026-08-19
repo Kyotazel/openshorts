@@ -559,6 +559,13 @@ export default function ClipEditor({ jobId, clipIndex, clipTitle, onClose, onRer
                             >
                                 <Plus size={14} /> add segment
                             </button>
+                            {!sourceAvailable && (
+                                <p className="text-[11px] text-muted mt-2 leading-relaxed">
+                                    the source video is no longer on the server, so cuts are
+                                    limited to the original clip range (extending or reframing
+                                    needs it; newly processed videos keep theirs)
+                                </p>
+                            )}
                         </div>
 
                         {/* framing override */}
