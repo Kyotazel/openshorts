@@ -124,20 +124,24 @@ class TestVirtualTranscript:
         v = recut.virtual_transcript(TRANSCRIPT, [_seg(10, 15), _seg(48, 52)])
         assert v["language"] == "en"
         assert len(v["segments"]) == 2
-        # "hello" (12.0-12.5 in source) → 2.0-2.5 on the clip.
+        # "hello" (12.0-12.5 in source) → 2.0-2.5 on the clip. The leading
+        # space is Whisper's word-boundary convention: without it the caption
+        # block collector merges every word into one glued line (regression
+        # caught on a real burn: "...creesycambiatodo").
         first = v["segments"][0]
-        assert first["words"] == [{"word": "hello", "start": 2.0, "end": 2.5}]
+        assert first["words"] == [{"word": " hello", "start": 2.0, "end": 2.5}]
         assert (first["start"], first["end"]) == (0.0, 5.0)
         # "again" (50.0-50.5) → second segment starts at offset 5.0 → 7.0-7.5.
         second = v["segments"][1]
-        assert second["words"] == [{"word": "again", "start": 7.0, "end": 7.5}]
+        assert second["words"] == [{"word": " again", "start": 7.0, "end": 7.5}]
         assert (second["start"], second["end"]) == (5.0, 9.0)
+        assert first["text"] == "hello"
 
     def test_partial_overlap_is_clamped_to_the_segment(self):
         # Word 12.0-12.5, segment 12.3-20 → starts at 0, ends at 0.2.
         v = recut.virtual_transcript(TRANSCRIPT, [_seg(12.3, 20)])
         word = v["segments"][0]["words"][0]
-        assert word["word"] == "hello"
+        assert word["word"] == " hello"
         assert word["start"] == 0.0
         assert word["end"] == 0.2
 
