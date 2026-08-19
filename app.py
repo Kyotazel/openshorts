@@ -14,7 +14,7 @@ import itertools
 import asyncio
 from datetime import datetime, timezone
 from dotenv import load_dotenv
-from typing import Dict, Optional, List
+from typing import Any, Dict, Optional, List
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request, Header, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
@@ -2327,6 +2327,10 @@ _FRAMING_STRATEGIES = {"auto": None, "full": "WIDE", "track": "TRACK"}
 # share metadata.json and the canonical files, so they must not interleave.
 _rerender_locks: Dict[str, asyncio.Lock] = {}
 
+# Scene-listing builds write stable preview/thumbnail names per job; serialize
+# them so overlapping editor opens don't tear each other's files.
+_scenes_locks: Dict[str, asyncio.Lock] = {}
+
 
 @app.post("/api/clip/rerender")
 async def rerender_clip(req: RerenderRequest, request: Request):
@@ -2463,6 +2467,12 @@ async def _rerender_locked(req: RerenderRequest, request: Request, job):
 
         updates = {'video_url': new_video_url, 'start': new_start,
                    'end': new_end, 'recipe': new_recipe}
+        # Per-scene manual framing is keyed by scene indices of a specific cut;
+        # this render neither applied it nor can it survive a changed cut, so
+        # clear it rather than let /scenes serve stale overrides against the
+        # wrong shots (re-frame after trimming to re-apply by hand).
+        if clip.get('crop_overrides'):
+            updates['crop_overrides'] = None
         clip.update(updates)
         data['shorts'] = clips
         with open(json_files[0], 'w') as f:
@@ -2488,6 +2498,355 @@ async def _rerender_locked(req: RerenderRequest, request: Request, job):
         if reservation_id:
             await _metering.release_reservation(reservation_id)
         print(f"❌ Rerender Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# --- Manual framing -----------------------------------------------------------
+#
+# The reframe engine picks the crop automatically, and on a podcast it is right
+# most of the time and grossly wrong occasionally: a wide shot of the whole
+# table averages over one face, so the scene falls to GENERAL (letterboxed) or
+# tracks the wrong person. There was no way to say "no, frame it here".
+#
+# The unit is the SCENE, not the clip, because a podcast cuts between a fixed
+# close camera and a fixed wide one, and the right crop differs per camera.
+# Scene boundaries already are the camera changes: PySceneDetect finds them.
+#
+# Scenes the user never touches keep the automatic camera, so correcting one
+# bad shot cannot spoil the ones the tracker got right.
+
+class ReframeRequest(BaseModel):
+    job_id: str
+    clip_index: int
+    # scene index (string key, JSON-style) -> either a crop centre as a
+    # fraction of the source width, or {"top": f, "bottom": f} to stack two
+    # regions. Fractions travel instead of pixels so the editor never needs to
+    # know the source dimensions.
+    crop_overrides: Dict[str, Any]
+    reapply_captions: bool = True
+
+
+def _clip_scene_workfile(source_path, segments, output_dir, token):
+    """Cut the clip out of the source so scenes can be detected on it.
+
+    The name is unique per call, unlike the thumbnails and the preview: two
+    editor opens on the same clip would otherwise write the same temp file at
+    once, and the first to finish deletes it out from under the second.
+    """
+    work_path = os.path.join(output_dir, f"scenes_{token}.mp4")
+    recut.run_cut_concat(source_path, segments, work_path, output_dir)
+    return work_path
+
+
+@app.get("/api/clip/{job_id}/{clip_index}/scenes")
+async def get_clip_scenes(job_id: str, clip_index: int, request: Request):
+    """Scenes of a clip, each with a SOURCE frame to frame it against.
+
+    The frames come from the uncropped cut, not the delivered clip: the point
+    is to show what the automatic crop threw away, which the 9:16 file no
+    longer contains.
+    """
+    # Entitlement too, not just ownership: listing scenes cuts the clip from
+    # source, runs scene detection and encodes a preview — real compute.
+    await require_managed_entitlement(request)
+    await _ensure_job_files(job_id, request)
+    if job_id not in jobs:
+        raise HTTPException(status_code=404, detail="Job not found")
+    job = jobs[job_id]
+    await _assert_job_owner(request, job)
+
+    output_dir = os.path.join(OUTPUT_DIR, job_id)
+    json_files = glob.glob(os.path.join(output_dir, "*_metadata.json"))
+    if not json_files:
+        raise HTTPException(status_code=404, detail="Metadata not found")
+    with open(json_files[0], 'r') as f:
+        data = json.load(f)
+
+    clips = data.get('shorts', [])
+    if clip_index < 0 or clip_index >= len(clips):
+        raise HTTPException(status_code=404, detail="Clip not found")
+
+    if data.get('output_format') == 'horizontal':
+        raise HTTPException(
+            status_code=400,
+            detail="Horizontal clips keep the full frame; there is no crop to reframe.")
+
+    clip = clips[clip_index]
+    segments, _canonical_range = _clip_recipe_parts(clip)
+    # What was applied last time. Without this the editor reopens blank, and
+    # since a re-render rebuilds from source using ONLY what it is sent, the
+    # next save would silently drop every earlier adjustment.
+    saved_overrides = clip.get('crop_overrides') or {}
+    source_path = _locate_source(job_id)
+    if not source_path:
+        raise HTTPException(
+            status_code=409,
+            detail="The source video is no longer on the server, so the "
+                   "framing of this clip can no longer be changed.")
+
+    def build():
+        import cv2
+        import main as m
+
+        # Stable for the files the browser fetches (no accumulation), unique
+        # for the temp cut (no collision between overlapping requests).
+        # temp_ prefix keeps these editor-only artifacts out of the self-host
+        # S3 backup (it skips temp_*); stable names still avoid accumulation.
+        token = str(clip_index)
+        work_token = f"{clip_index}_{uuid.uuid4().hex[:8]}"
+        preview_name = f"temp_preview_{clip_index}.mp4"
+        preview_path = os.path.join(output_dir, preview_name)
+        work_path = _clip_scene_workfile(source_path, segments, output_dir, work_token)
+        try:
+            scenes, fps = m.detect_scenes(work_path)
+            fps = float(fps) or 30.0
+            orig_w, orig_h = m.get_video_resolution(work_path)
+
+            cap = cv2.VideoCapture(work_path)
+            if not scenes:
+                total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 1
+                bounds = [(0, total)]
+            else:
+                bounds = [(s.get_frames(), e.get_frames()) for s, e in scenes]
+
+            out = []
+            for idx, (start_f, end_f) in enumerate(bounds):
+                mid = (start_f + end_f) // 2
+                cap.set(cv2.CAP_PROP_POS_FRAMES, mid)
+                ok, frame = cap.read()
+                thumb_name = f"temp_scene_{token}_{idx:03d}.jpg"
+                suggested = 0.5
+                suggested_y = 0.5
+                if ok:
+                    cv2.imwrite(os.path.join(output_dir, thumb_name), frame,
+                                [int(cv2.IMWRITE_JPEG_QUALITY), 80])
+                    # Start the rectangle on the biggest face in the shot, so
+                    # the common case is a nudge rather than a hunt.
+                    try:
+                        faces = m.detect_face_candidates(frame)
+                        if faces:
+                            box = max(faces,
+                                      key=lambda f: f['box'][2] * f['box'][3])['box']
+                            suggested = min(1.0, max(0.0,
+                                                     (box[0] + box[2] / 2) / orig_w))
+                            # SPLIT halves crop vertically too, so the face's
+                            # height matters there (TRACK ignores it).
+                            suggested_y = min(1.0, max(0.0,
+                                                       (box[1] + box[3] / 2) / orig_h))
+                    except Exception:
+                        pass
+                else:
+                    thumb_name = None
+
+                out.append({
+                    "index": idx,
+                    "start": round(start_f / fps, 3),
+                    "end": round(end_f / fps, 3),
+                    "thumbnail_url": (f"/videos/{job_id}/{thumb_name}"
+                                      if thumb_name else None),
+                    "suggested_center": round(suggested, 4),
+                    "suggested_center_y": round(suggested_y, 4),
+                })
+            cap.release()
+            return orig_w, orig_h, out, preview_name
+        finally:
+            # The uncropped cut becomes a light preview instead of being
+            # discarded: judging the framing means knowing who is talking, and
+            # the delivered 9:16 file no longer shows the rest of the room.
+            try:
+                if os.path.exists(work_path):
+                    subprocess.run(
+                        ["ffmpeg", "-y", "-loglevel", "error", "-i", work_path,
+                         "-vf", "scale=640:-2", "-c:v", "libx264", "-preset",
+                         "veryfast", "-crf", "30", "-c:a", "aac", "-b:a", "96k",
+                         # faststart: the editor's <video> streams the preview;
+                         # a tail moov would stall it until fully downloaded.
+                         "-movflags", "+faststart",
+                         preview_path], check=True, timeout=600)
+            except Exception as exc:
+                print(f"Scene preview failed: {exc}")
+            finally:
+                if os.path.exists(work_path):
+                    os.remove(work_path)
+
+    # Serialized per job: two overlapping opens would run two ffmpeg writers
+    # on the same stable preview/thumbnail names and serve a torn file.
+    lock = _scenes_locks.setdefault(job_id, asyncio.Lock())
+    async with lock:
+        try:
+            loop = asyncio.get_event_loop()
+            orig_w, orig_h, scenes_out, preview_name = await loop.run_in_executor(None, build)
+        except Exception as e:
+            print(f"Scene listing error: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
+
+    # Width of the crop window as a fraction of the source width: the editor
+    # draws the rectangle with it and needs no pixel arithmetic of its own.
+    # The aspect follows the job's output format (9:16, or 1:1 for square).
+    aspect = 1.0 if data.get('output_format') == 'square' else 9.0 / 16.0
+    crop_w = min(orig_w, orig_h * aspect)
+    return {
+        "job_id": job_id,
+        "clip_index": clip_index,
+        "source_width": orig_w,
+        "source_height": orig_h,
+        "crop_width_fraction": round(crop_w / orig_w, 4),
+        "preview_url": f"/videos/{job_id}/{preview_name}",
+        "saved_overrides": saved_overrides,
+        "scenes": scenes_out,
+    }
+
+
+@app.post("/api/clip/reframe")
+async def reframe_clip(req: ReframeRequest, request: Request):
+    """Re-render a clip with hand-framed scenes, leaving its cut untouched.
+
+    Deliberately separate from /api/clip/rerender: the overrides are keyed by
+    scene index, and a scene index only means anything against a given cut. If
+    framing rode along with a trim save, changing the trim would silently move
+    every override onto the wrong shot.
+    """
+    await require_managed_entitlement(request)
+    await _ensure_job_files(req.job_id, request)
+    if req.job_id not in jobs:
+        raise HTTPException(status_code=404, detail="Job not found")
+    job = jobs[req.job_id]
+    await _assert_job_owner(request, job)
+
+    def _fraction(v):
+        return min(1.0, max(0.0, float(v)))
+
+    overrides = {}
+    for key, value in (req.crop_overrides or {}).items():
+        try:
+            idx = int(key)
+            if isinstance(value, dict):
+                def _half(h):
+                    if isinstance(h, dict):
+                        return {"x": _fraction(h["x"]), "y": _fraction(h.get("y", 0.5))}
+                    return {"x": _fraction(h), "y": 0.5}
+                overrides[idx] = {"top": _half(value["top"]),
+                                  "bottom": _half(value["bottom"])}
+            else:
+                overrides[idx] = _fraction(value)
+        except (KeyError, TypeError, ValueError):
+            continue
+    if not overrides:
+        raise HTTPException(status_code=400,
+                            detail="No scene framing was provided.")
+
+    # Same lock as /rerender: both read-modify-write the job's metadata.json,
+    # and the metadata must be read INSIDE the lock or a rerender committing
+    # in between gets clobbered by a write of stale data.
+    lock = _rerender_locks.setdefault(req.job_id, asyncio.Lock())
+    async with lock:
+        return await _reframe_locked(req, request, job, overrides)
+
+
+async def _reframe_locked(req: ReframeRequest, request: Request, job, overrides):
+    output_dir = os.path.join(OUTPUT_DIR, req.job_id)
+    json_files = glob.glob(os.path.join(output_dir, "*_metadata.json"))
+    if not json_files:
+        raise HTTPException(status_code=404, detail="Metadata not found")
+    with open(json_files[0], 'r') as f:
+        data = json.load(f)
+
+    clips = data.get('shorts', [])
+    if req.clip_index < 0 or req.clip_index >= len(clips):
+        raise HTTPException(status_code=404, detail="Clip not found")
+    clip = clips[req.clip_index]
+
+    if data.get('output_format') == 'horizontal':
+        raise HTTPException(
+            status_code=400,
+            detail="Horizontal clips keep the full frame; there is no crop to reframe.")
+
+    segments, canonical_range = _clip_recipe_parts(clip)
+    source_path = _locate_source(req.job_id)
+    if not source_path:
+        raise HTTPException(
+            status_code=409,
+            detail="The source video is no longer on the server, so the "
+                   "framing of this clip can no longer be changed.")
+
+    # Whole-clip framing (recipe.framing, the clip editor's selector) still
+    # applies to the scenes the user did NOT hand-position: apply_crop_overrides
+    # runs after force_strategy, so a per-scene choice beats the whole-clip one.
+    framing = (clip.get('recipe') or {}).get('framing') or 'auto'
+    force_strategy = _FRAMING_STRATEGIES.get(framing)
+
+    # A reframe re-renders the full cut from source — same work as a source-path
+    # rerender, so it meters the same.
+    total = recut.total_duration(segments)
+    rerender_minutes = (max(1, math.ceil(total / 60.0))
+                        if BILLING_ENABLED else 0)
+    reservation_id = await reserve_managed_action(
+        request, rerender_minutes, req.job_id, "reframe")
+
+    # Every default clip ships with burned captions; re-rendering without them
+    # would silently hand back a caption-less file.
+    v_transcript = (recut.virtual_transcript(data.get('transcript') or {}, segments)
+                    if req.reapply_captions else None)
+
+    base_name = os.path.basename(json_files[0]).replace('_metadata.json', '')
+    # The CLEAN base name, exactly as /api/clip/rerender does — never the
+    # current derived file. perform_recut prefixes whatever it is given, so
+    # feeding it the newest derivative made every re-render add another
+    # recut_<ts>_<hex>_ in front of the previous one. A few rounds of framing
+    # and captioning and the path blew past the filesystem limit:
+    # "Error opening output ...: File name too long".
+    clean_name = f"{base_name}_clip_{req.clip_index + 1}.mp4"
+
+    def run():
+        return recut.perform_recut(
+            input_path=source_path, segments=segments,
+            output_dir=output_dir, clean_name=clean_name,
+            reframe=True, output_format=data.get('output_format', 'auto'),
+            watermark=bool(job.get('watermark')),
+            force_strategy=force_strategy,
+            crop_overrides=overrides,
+            captions_transcript=v_transcript)
+
+    try:
+        loop = asyncio.get_event_loop()
+        served_name, _clean = await loop.run_in_executor(None, run)
+
+        new_video_url = f"/videos/{req.job_id}/{served_name}"
+        new_recipe = {"v": 1, "segments": segments,
+                      "canonical_range": canonical_range}
+        if framing != 'auto':
+            new_recipe["framing"] = framing
+        updates = {
+            'video_url': new_video_url,
+            'recipe': new_recipe,
+            'crop_overrides': {str(k): v for k, v in overrides.items()},
+        }
+        clip.update(updates)
+        data['shorts'] = clips
+        with open(json_files[0], 'w') as f:
+            json.dump(data, f, indent=2)
+        mem_clips = (job.get('result') or {}).get('clips') or []
+        if req.clip_index < len(mem_clips):
+            mem_clips[req.clip_index].update(updates)
+
+        _archive_clip_edit_bg(req.job_id, req.clip_index, served_name)
+        if reservation_id:
+            await _metering.commit_reservation(reservation_id)
+        # The cut is untouched, but the response mirrors /rerender's shape
+        # so the dashboard can reuse one handler without clearing the
+        # clip's timing fields.
+        return {
+            "success": True,
+            "new_video_url": new_video_url,
+            "recipe": new_recipe,
+            "start": min(s['start'] for s in segments),
+            "end": max(s['end'] for s in segments),
+            "framed_scenes": sorted(overrides),
+        }
+    except Exception as e:
+        if reservation_id:
+            await _metering.release_reservation(reservation_id)
+        print(f"Reframe Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

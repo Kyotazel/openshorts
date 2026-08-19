@@ -265,7 +265,7 @@ def _run_ffmpeg(command):
 def perform_recut(*, input_path, segments, output_dir, clean_name,
                   reframe=False, output_format="auto", watermark=False,
                   captions_transcript=None, force_strategy=None,
-                  runner=None, renderer=None,
+                  crop_overrides=None, runner=None, renderer=None,
                   watermarker=None, captioner=None):
     """Render a recut clip. Returns (served_filename, clean_filename).
 
@@ -279,6 +279,10 @@ def perform_recut(*, input_path, segments, output_dir, clean_name,
       ``virtual_transcript``); when given and non-empty, captions are burned
       LAST onto a ``subtitled_<ts>_`` derivative, preserving the invariant
       that the clean file stays clean for later re-styling.
+    - ``crop_overrides``: scene index -> crop centre as a fraction of the
+      source width, for scenes the user framed by hand. Source path only, for
+      the same reason as ``reframe``: the canonical file is already cropped, so
+      its framing can no longer be changed.
 
     The renderer/watermarker/captioner hooks default to main.py's
     implementations, imported lazily so this module stays importable without
@@ -303,7 +307,8 @@ def perform_recut(*, input_path, segments, output_dir, clean_name,
                 main_render = _main_attr("render_clip")
 
                 def render(i, o, f):
-                    return main_render(i, o, f, force_strategy=force_strategy)
+                    return main_render(i, o, f, force_strategy=force_strategy,
+                                       crop_overrides=crop_overrides)
             if not render(work_path, out_path, output_format):
                 raise RuntimeError("reframe failed on the recut clip")
         else:

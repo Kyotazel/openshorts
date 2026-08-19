@@ -10,6 +10,7 @@ import SaaShortsTab from './components/SaaShortsTab';
 import UGCGallery from './components/UGCGallery';
 import ScheduleWeekModal from './components/ScheduleWeekModal';
 import ClipEditor from './components/ClipEditor';
+import ReframeEditor from './components/ReframeEditor';
 import UsageMeter from './components/UsageMeter';
 import TopUpModal from './components/TopUpModal';
 import StarBanner from './components/StarBanner';
@@ -231,6 +232,7 @@ function App() {
   const [showScheduleWeek, setShowScheduleWeek] = useState(false);
   // Clip editor overlay: index of the clip being edited, or null.
   const [editingClip, setEditingClip] = useState(null);
+  const [reframingClip, setReframingClip] = useState(null);
 
   // Silent-success "saved" states for the settings key inputs (design.md: no alert popups)
   const [elevenLabsSaved, setElevenLabsSaved] = useState(false);
@@ -1459,6 +1461,7 @@ function App() {
                           index={i}
                           jobId={jobId}
                           onEditClip={(index) => setEditingClip(index)}
+                          onReframeClip={(index) => setReframingClip(index)}
                           initialState={projectState?.clips?.find((c) => c.index === i) || null}
                           onStateChange={handleClipStateChange}
                           durableUrl={durableClips[i]}
@@ -1636,6 +1639,15 @@ function App() {
           clipTitle={results.clips[editingClip].video_title_for_youtube_short || ''}
           onClose={() => setEditingClip(null)}
           onRerendered={handleClipRerendered}
+        />
+      )}
+      {reframingClip !== null && results?.clips?.[reframingClip] && (
+        <ReframeEditor
+          jobId={jobId}
+          clipIndex={reframingClip}
+          clipTitle={results.clips[reframingClip].video_title_for_youtube_short || ''}
+          onClose={() => setReframingClip(null)}
+          onReframed={handleClipRerendered}
         />
       )}
       {showLogin && <LoginModal onClose={() => setShowLogin(false)} />}

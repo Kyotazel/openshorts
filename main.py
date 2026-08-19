@@ -883,16 +883,19 @@ def auto_caption_clip(clip_path, transcript, clip_start, clip_end):
 
 
 def render_clip(input_video, final_output_video, output_format="auto",
-                force_strategy=None):
+                force_strategy=None, crop_overrides=None):
     """Route a cut clip through the right renderer for the chosen output format.
     vertical/auto -> 9:16 reframe, square -> 1:1 reframe, horizontal -> keep.
     ``force_strategy`` (e.g. 'WIDE'/'TRACK') pins every scene's layout — the
-    clip editor's manual framing override."""
+    clip editor's whole-clip framing override. ``crop_overrides`` positions
+    individual scenes by hand (the per-scene reframing editor) and wins over
+    ``force_strategy`` for the scenes it names."""
     if output_format == "horizontal":
         return finalize_clip_passthrough(input_video, final_output_video)
     aspect = 1.0 if output_format == "square" else ASPECT_RATIO
     return process_video_to_vertical(input_video, final_output_video, aspect_ratio=aspect,
-                                     force_strategy=force_strategy)
+                                     force_strategy=force_strategy,
+                                     crop_overrides=crop_overrides)
 
 
 # Watermark geometry, as fractions of the clip width/height.
@@ -961,13 +964,14 @@ def apply_watermark(video_path):
 
 
 def process_video_to_vertical(input_video, final_output_video, aspect_ratio=ASPECT_RATIO,
-                              force_strategy=None):
+                              force_strategy=None, crop_overrides=None):
     """
     Core logic to reframe a horizontal video to a target aspect ratio using
     scene detection and Active Speaker Tracking (MediaPipe).
     aspect_ratio: width/height of the output (9/16 vertical, 1.0 square).
-    force_strategy pins every scene's layout (v2 engine only — the v1 loop
-    below has no layout concept beyond its own classifier).
+    force_strategy / crop_overrides pin layouts and scene crops by hand (v2
+    engine only — the v1 loop below has no layout concept beyond its own
+    classifier).
     """
     script_start_time = time.time()
 
@@ -978,10 +982,19 @@ def process_video_to_vertical(input_video, final_output_video, aspect_ratio=ASPE
             import reframe_v2
             t0 = time.time()
             result = reframe_v2.render(input_video, final_output_video, aspect_ratio,
-                                       force_strategy=force_strategy)
+                                       force_strategy=force_strategy,
+                                       crop_overrides=crop_overrides)
             print(f"   ⏱️ Reframe v2 total: {time.time() - t0:.1f}s")
             return result
         except Exception as e:
+            # Only v2 honours hand-framed scenes and forced layouts. Falling
+            # through to v1 would quietly return an automatically framed clip,
+            # and the user would see their correction vanish with no reason
+            # given — so surface the failure instead of discarding their input.
+            if crop_overrides or force_strategy:
+                raise RuntimeError(
+                    f"manual framing needs the v2 reframe engine, which failed "
+                    f"({type(e).__name__}: {e})") from e
             print(f"   ⚠️ Reframe v2 failed ({type(e).__name__}: {e}) — "
                   f"falling back to v1 frame loop")
 
