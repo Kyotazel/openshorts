@@ -1152,6 +1152,10 @@ async def lifespan(app: FastAPI):
     cleanup_task = asyncio.create_task(cleanup_jobs())
     if BILLING_ENABLED:
         await cloud.setup_async(app, keep_reservation_ids=_resumed_reservation_ids)
+        # Nag on Telegram while the residential proxy is down/out of credits —
+        # a single job-failure alert is easy to miss and ingest stays broken
+        # until someone tops the balance up.
+        asyncio.create_task(_alerts.proxy_watch_loop())
     yield
     # Cleanup (optional: cancel worker)
 

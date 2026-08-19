@@ -3,6 +3,8 @@
 Tracks recent managed-job outcomes in memory and emails ADMIN_EMAIL (via Resend)
 when something looks broken, with a per-alert cooldown so it never spams.
 """
+import asyncio
+import os
 import time
 from collections import deque
 
@@ -117,18 +119,27 @@ async def send_admin_alert(subject: str, body: str):
 
 async def record_job_outcome(ok: bool, error_text: str = ""):
     """Record a managed job's result and fire an alert if the picture looks bad."""
+    global _proxy_down_since, _proxy_last_nag
     _recent.append(bool(ok))
     if ok:
         return
 
-    # 1) Proxy / credits problem — most urgent, alert immediately.
-    if _looks_like_proxy_error(error_text) and _cooldown_ok("proxy"):
-        await send_admin_alert(
-            "⚠️ Proxy error — may be out of credits",
-            "A managed job failed with a proxy-related error. Check your proxy "
-            "balance — downloads will keep failing until it's topped up.\n\n"
-            f"Error:\n{error_text[:1200]}",
-        )
+    # 1) Proxy / credits problem — most urgent, alert immediately AND open the
+    # incident so the proxy watcher keeps nagging until the balance is back
+    # (one alert at 3am is easy to miss; an exhausted proxy takes all
+    # YouTube-URL ingest down until someone tops it up).
+    if _looks_like_proxy_error(error_text):
+        if not _proxy_down_since:
+            _proxy_down_since = time.time()
+            _proxy_last_nag = time.time()
+        if _cooldown_ok("proxy"):
+            await send_admin_alert(
+                "🔴 Proxy error — may be out of credits",
+                "A managed job failed with a proxy-related error. Check your proxy "
+                "balance — downloads will keep failing until it's topped up.\n"
+                "This repeats every 2 h until the proxy answers again.\n\n"
+                f"Error:\n{error_text[:1200]}",
+            )
         return
 
     # 2) High failure rate — report it honestly and classify the last error
@@ -142,3 +153,85 @@ async def record_job_outcome(ok: bool, error_text: str = ""):
             f"{fails} of the last {len(recent)} managed jobs failed.\n\n"
             f"Last error:\n{error_text[:1200]}",
         )
+
+
+# --- Proxy balance watcher ----------------------------------------------------
+# An exhausted residential proxy takes ALL YouTube-URL ingest down (when the
+# datacenter IP is blocked, the proxy is the only working route), and a single
+# alert at the moment it dies is easy to miss. This watcher probes the proxy on
+# a schedule, keeps nagging on Telegram until the balance is topped up, and
+# confirms recovery — so exhaustion is caught even before the next user job
+# fails (incident of 19-aug-2026: 407 TRAFFIC_EXHAUSTED, found by accident).
+_PROXY_PROBE_INTERVAL = 1800        # seconds between probes (30 min)
+_PROXY_RENOTIFY = 7200              # keep nagging every 2 h while it stays down
+# 204-No-Content endpoint: the probe costs a handful of bytes of paid traffic.
+_PROXY_PROBE_URL = "https://www.google.com/generate_204"
+_proxy_down_since = None
+_proxy_last_nag = 0.0
+
+
+async def _probe_proxy():
+    """(ok, detail) for one cheap request through the residential proxy, or
+    None when no proxy is configured (nothing to watch)."""
+    proxy = os.environ.get("PROXY_URL", "").strip()
+    if not proxy:
+        return None
+    try:
+        import httpx
+        async with httpx.AsyncClient(proxy=proxy, timeout=20) as client:
+            resp = await client.get(_PROXY_PROBE_URL)
+        if resp.status_code < 400:
+            return True, ""
+        return False, f"HTTP {resp.status_code}"
+    except Exception as e:
+        return False, f"{type(e).__name__}: {e}"
+
+
+async def proxy_watch_tick():
+    """One probe cycle: open the incident, nag while down, confirm recovery."""
+    global _proxy_down_since, _proxy_last_nag
+    result = await _probe_proxy()
+    if result is None:
+        return
+    ok, detail = result
+    now = time.time()
+    if ok:
+        if _proxy_down_since:
+            mins = int((now - _proxy_down_since) / 60)
+            await send_admin_alert(
+                "✅ Proxy recovered",
+                f"The residential proxy answers again after ~{mins} min down. "
+                "YouTube-URL ingest should be back.",
+            )
+            _proxy_down_since = None
+            _proxy_last_nag = 0.0
+        return
+    if not _proxy_down_since:
+        _proxy_down_since = now
+        _proxy_last_nag = now
+        await send_admin_alert(
+            "🔴 Proxy DOWN — likely out of credits",
+            "The residential proxy probe failed. YouTube-URL jobs will keep "
+            "failing until the balance is topped up.\n"
+            "This alert repeats every 2 h until the proxy answers again.\n\n"
+            f"Probe error: {detail[:400]}",
+        )
+    elif now - _proxy_last_nag >= _PROXY_RENOTIFY:
+        _proxy_last_nag = now
+        hours = (now - _proxy_down_since) / 3600
+        await send_admin_alert(
+            f"🔴 Proxy STILL down ({hours:.1f} h)",
+            "The residential proxy still fails — YouTube-URL ingest remains "
+            "broken until the balance is topped up.\n\n"
+            f"Probe error: {detail[:400]}",
+        )
+
+
+async def proxy_watch_loop():
+    """Background task started from the app lifespan (managed mode only)."""
+    while True:
+        try:
+            await proxy_watch_tick()
+        except Exception as e:
+            print(f"⚠️  Proxy watch error: {e}")
+        await asyncio.sleep(_PROXY_PROBE_INTERVAL)
