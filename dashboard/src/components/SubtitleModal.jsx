@@ -444,12 +444,18 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
 
                     <div className="mt-5 shrink-0 space-y-2">
                         {(() => {
+                            // Text edits must survive the server render path too
+                            // (issue #69): send the edited words whenever the text
+                            // differs from what the transcript produced.
+                            const textEdited = originalCaptions.length > 0
+                                && editableText.trim() !== originalCaptions.map((c) => c.text).join(' ').trim();
                             const styleOptions = {
                                 position, fontSize, fontName, fontColor, borderColor, borderWidth, bgColor, bgOpacity,
                                 // Karaoke burn (server-side ASS render)
                                 style, effect, baseOpacity, uppercase, highlightColor,
                                 // Remotion data
                                 remotion: useRemotionPreview ? subtitleConfig : null,
+                                captions: textEdited ? captions : null,
                             };
                             const bulkRunning = bulkProgress?.running;
                             return (
@@ -469,7 +475,7 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
                                     </div>
                                     {onApplyAll && bulkCount > 1 && (
                                         <button
-                                            onClick={() => onApplyAll(styleOptions)}
+                                            onClick={() => onApplyAll({ ...styleOptions, captions: null })}
                                             disabled={isProcessing}
                                             className="btn-ghost w-full flex items-center justify-center gap-2"
                                         >

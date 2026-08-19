@@ -2100,6 +2100,14 @@ async def edit_clip(
         print(f"❌ Edit Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+class CaptionWordIn(BaseModel):
+    """One user-edited caption word, clip-relative ms — the same shape the
+    /transcript endpoint hands the subtitle modal."""
+    text: str
+    startMs: int
+    endMs: int
+
+
 class SubtitleRequest(BaseModel):
     job_id: str
     clip_index: int
@@ -2117,6 +2125,10 @@ class SubtitleRequest(BaseModel):
     base_opacity: float = 1.0  # opacity of non-active words (dimmed modern look)
     uppercase: bool = False
     input_filename: Optional[str] = None
+    # User-edited caption words. When present, the burn uses them VERBATIM
+    # instead of regenerating from the stored transcript — without this, text
+    # edits in the modal were silently discarded on the server render path.
+    words: Optional[List[CaptionWordIn]] = None
 
 
 @app.get("/api/clip/{job_id}/{clip_index}/transcript")
@@ -2679,6 +2691,32 @@ async def add_subtitles(req: SubtitleRequest, request: Request):
         sub_transcript = transcript
         sub_start = clip_data.get('start', 0)
         sub_end = clip_data.get('end', 0)
+
+    # User-edited captions win over both: build a synthetic clip-relative
+    # transcript from them so the SRT/ASS generators burn the edited words
+    # verbatim (issue #69 — edits used to be dropped on this path).
+    if req.words:
+        if len(req.words) > 2000:
+            raise HTTPException(status_code=400, detail="Too many caption words (max 2000).")
+        # Leading space = Whisper's word-boundary convention; without it the
+        # block collector treats each word as a continuation fragment and
+        # glues the whole line together.
+        edited = [
+            {"word": " " + w.text.strip(), "start": max(0.0, w.startMs / 1000.0),
+             "end": max(0.0, w.endMs / 1000.0)}
+            for w in req.words if w.text.strip() and w.endMs > w.startMs >= 0
+        ]
+        if edited:
+            edited.sort(key=lambda w: w["start"])
+            sub_transcript = {
+                "language": (transcript or {}).get("language", "en"),
+                "segments": [{
+                    "start": edited[0]["start"], "end": edited[-1]["end"],
+                    "text": " ".join(w["word"] for w in edited),
+                    "words": edited,
+                }],
+            }
+            sub_start, sub_end = 0.0, max(w["end"] for w in edited)
 
     # Video Path
     if req.input_filename:
