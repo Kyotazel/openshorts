@@ -381,11 +381,15 @@ def _canonical_clip_file(output_dir, base_name, index):
     """
     clean = f"{base_name}_clip_{index + 1}.mp4"
     try:
-        # subtitled_*_{clean} also matches subtitled_<ts>_recut_<ts>_{clean},
-        # i.e. a captioned recut; the bare recut_ pattern covers recuts that
-        # shipped uncaptioned.
+        # subtitled_*_{clean} also matches subtitled_<ts>_recut_<ts>_{clean}
+        # and subtitled_<ts>_hooked_<ts>_{clean}, i.e. captioned recuts and
+        # captioned hooks; the bare recut_/hooked_/hook_ patterns cover
+        # derivations that shipped uncaptioned (hook_ is the legacy manual-
+        # hook prefix, kept so old jobs still resolve).
         derived = (glob.glob(os.path.join(output_dir, f"subtitled_*_{clean}"))
-                   + glob.glob(os.path.join(output_dir, f"recut_*_{clean}")))
+                   + glob.glob(os.path.join(output_dir, f"recut_*_{clean}"))
+                   + glob.glob(os.path.join(output_dir, f"hooked_*_{clean}"))
+                   + glob.glob(os.path.join(output_dir, f"hook_{clean}")))
     except Exception:
         derived = []
     if not derived:
@@ -403,6 +407,18 @@ def _strip_burned_captions(output_dir, filename):
     """
     while True:
         m = re.match(r'^subtitled_\d+_(.+)$', filename)
+        if not m or not os.path.exists(os.path.join(output_dir, m.group(1))):
+            return filename
+        filename = m.group(1)
+
+
+def _strip_burned_hook(output_dir, filename):
+    """Walk ``hooked_<ts>_`` (and legacy ``hook_``) prefixes back to the file
+    without a burned hook. Same fail-safe contract as _strip_burned_captions:
+    the name is returned unchanged when there is nothing to strip or the
+    underlying file is gone."""
+    while True:
+        m = re.match(r'^(?:hooked_\d+_|hook_)(.+)$', filename)
         if not m or not os.path.exists(os.path.join(output_dir, m.group(1))):
             return filename
         filename = m.group(1)
@@ -2044,7 +2060,7 @@ async def edit_clip(
                 # Zooms would crop burned-in captions/hooks off screen, so tell
                 # the editor when the source already carries them. `filename` is
                 # the original clip name (safe_input_path is an ASCII temp copy).
-                has_captions = ("subtitled_" in filename) or ("hook_" in filename)
+                has_captions = ("subtitled_" in filename) or ("hook_" in filename) or ("hooked_" in filename)
                 filter_data = editor.get_ffmpeg_filter(vid_file, duration, fps=fps, width=width, height=height, transcript=transcript, has_captions=has_captions)
                 
                 # 4. Apply
@@ -3284,12 +3300,13 @@ async def remove_subtitles(req: RemoveSubtitlesRequest, request: Request):
 class HookRequest(BaseModel):
     job_id: str
     clip_index: int
-    text: str
+    text: Optional[str] = ""
     input_filename: Optional[str] = None
     position: Optional[str] = "top" # top, center, bottom
     size: Optional[str] = "M" # S, M, L
     duration_seconds: Optional[float] = None  # None = hook visible for the whole clip
     style: Optional[str] = "classic"  # classic/dark/yellow/red/outline/outline_yellow
+    remove: Optional[bool] = False  # strip the burned hook instead of adding one
 
 @app.post("/api/hook")
 async def add_hook(req: HookRequest, request: Request):
@@ -3328,44 +3345,55 @@ async def add_hook(req: HookRequest, request: Request):
     if not os.path.exists(input_path):
         raise HTTPException(status_code=404, detail=f"Video file not found: {input_path}")
 
-    # Same invariant as /api/edit: overlay onto the clip WITHOUT its burned
+    if not req.remove and not (req.text or "").strip():
+        raise HTTPException(status_code=400, detail="Hook text is required")
+
+    # Same invariant as /api/edit: derive from the clip WITHOUT its burned
     # captions, then put them back on top, so a later restyle never stacks a
-    # second caption layer (see _reapply_captions).
+    # second caption layer (see _reapply_captions). The hook layer is stripped
+    # too: a new hook REPLACES the burned one (auto-hook or a previous manual
+    # one) instead of stacking on top of it.
     clean_name = _strip_burned_captions(output_dir, filename)
     had_captions = clean_name != filename
-    if had_captions:
-        filename = clean_name
-        input_path = os.path.join(output_dir, clean_name)
+    clean_name = _strip_burned_hook(output_dir, clean_name)
+    filename = clean_name
+    input_path = os.path.join(output_dir, clean_name)
 
-    # Output video
-    output_filename = f"hook_{filename}"
-    output_path = os.path.join(output_dir, output_filename)
-    
-    # Map Size to Scale
-    size_map = {"S": 0.8, "M": 1.0, "L": 1.3}
-    font_scale = size_map.get(req.size, 1.0)
+    if req.remove:
+        # Nothing to burn: the hook-less file is the target; captions (if the
+        # clip had them) go back on below.
+        output_filename = filename
+        output_path = input_path
+        reservation_id = None
+    else:
+        output_filename = f"hooked_{int(time.time())}_{filename}"
+        output_path = os.path.join(output_dir, output_filename)
 
-    # Meter the FFmpeg overlay re-encode (no-op for BYOK / self-host).
-    hook_minutes = _cloud_config.HOOK_MINUTES if BILLING_ENABLED else 0
-    reservation_id = await reserve_managed_action(
-        request, hook_minutes, req.job_id, "hook")
+        # Map Size to Scale
+        size_map = {"S": 0.8, "M": 1.0, "L": 1.3}
+        font_scale = size_map.get(req.size, 1.0)
 
-    try:
-        # Run in thread pool
-        def run_hook():
-             add_hook_to_video(input_path, req.text, output_path, position=req.position, font_scale=font_scale, duration=req.duration_seconds, style=req.style)
+        # Meter the FFmpeg overlay re-encode (no-op for BYOK / self-host).
+        hook_minutes = _cloud_config.HOOK_MINUTES if BILLING_ENABLED else 0
+        reservation_id = await reserve_managed_action(
+            request, hook_minutes, req.job_id, "hook")
 
-        loop = asyncio.get_event_loop()
-        await loop.run_in_executor(None, run_hook)
+        try:
+            # Run in thread pool
+            def run_hook():
+                add_hook_to_video(input_path, req.text, output_path, position=req.position, font_scale=font_scale, duration=req.duration_seconds, style=req.style)
 
-    except Exception as e:
-        print(f"❌ Hook Error: {e}")
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(None, run_hook)
+
+        except Exception as e:
+            print(f"❌ Hook Error: {e}")
+            if reservation_id:
+                await _metering.release_reservation(reservation_id)
+            raise HTTPException(status_code=500, detail=str(e))
+
         if reservation_id:
-            await _metering.release_reservation(reservation_id)
-        raise HTTPException(status_code=500, detail=str(e))
-
-    if reservation_id:
-        await _metering.commit_reservation(reservation_id)
+            await _metering.commit_reservation(reservation_id)
 
     # Captions back on top (see /api/edit for the same invariant).
     if had_captions:
@@ -3374,11 +3402,26 @@ async def add_hook(req: HookRequest, request: Request):
         if recap:
             output_filename = os.path.basename(recap)
 
+    # Record the burned hook so the editor knows what the clip carries (the
+    # auto-hook pipeline writes the same key).
+    if req.remove:
+        clip_data.pop('auto_hook', None)
+    else:
+        clip_data['auto_hook'] = {
+            "text": req.text, "style": req.style, "position": req.position,
+            "duration_seconds": req.duration_seconds,
+        }
+
     # Update Persistence (Same logic as subtitles)
     # Update InMemory Jobs
     if req.clip_index < len(job['result']['clips']):
-         job['result']['clips'][req.clip_index]['video_url'] = f"/videos/{req.job_id}/{output_filename}"
-    
+        mem_clip = job['result']['clips'][req.clip_index]
+        mem_clip['video_url'] = f"/videos/{req.job_id}/{output_filename}"
+        if req.remove:
+            mem_clip.pop('auto_hook', None)
+        else:
+            mem_clip['auto_hook'] = clip_data['auto_hook']
+
     # Update Metadata on Disk
     try:
         if req.clip_index < len(clips):
@@ -3394,7 +3437,8 @@ async def add_hook(req: HookRequest, request: Request):
 
     return {
         "success": True,
-        "new_video_url": f"/videos/{req.job_id}/{output_filename}"
+        "new_video_url": f"/videos/{req.job_id}/{output_filename}",
+        "burned_hook": None if req.remove else clip_data['auto_hook'],
     }
 
 class TranslateRequest(BaseModel):

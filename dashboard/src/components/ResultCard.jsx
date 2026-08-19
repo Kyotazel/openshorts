@@ -48,7 +48,7 @@ export default function ResultCard({ clip, index, jobId, durableUrl, uploadPostK
     // subtitled file (double-subtitle bug).
     const stripBurns = (filename) => {
         let f = filename || '', prev;
-        do { prev = f; f = f.replace(/^subtitled_\d+_/, '').replace(/^hook_/, ''); } while (f !== prev);
+        do { prev = f; f = f.replace(/^subtitled_\d+_/, '').replace(/^hooked_\d+_/, '').replace(/^hook_/, ''); } while (f !== prev);
         return f;
     };
     const originalVideoUrl = getApiUrl((clip.video_url || '').replace(/[^/]+$/, stripBurns((clip.video_url || '').split('/').pop())));
@@ -158,7 +158,12 @@ export default function ResultCard({ clip, index, jobId, durableUrl, uploadPostK
     // True when the current server file already carries burned-in content.
     // Browser (Remotion) renders compose over the ORIGINAL clip, so using them
     // here would silently drop those burns — chain via server FFmpeg instead.
-    const hasServerBurns = /(^|_)(subtitled|hook)_/.test(serverVideoFile || '');
+    const hasServerBurns = /(^|_)(subtitled|hook|hooked)_/.test(serverVideoFile || '');
+
+    // The hook currently burned into the server file (auto-hook or a manual
+    // one). /api/hook REPLACES it; tracked locally so the modal stays honest
+    // after edits without refetching the job.
+    const [burnedHook, setBurnedHook] = useState(clip.auto_hook?.text || null);
 
     // Fetch clip duration from transcript endpoint
     useEffect(() => {
@@ -463,6 +468,39 @@ export default function ResultCard({ clip, index, jobId, durableUrl, uploadPostK
             if (data.new_video_url) {
                 setCurrentVideoUrl(getApiUrl(data.new_video_url));
                 setServerVideoFile(data.new_video_url.split('/').pop());
+                setBurnedHook(data.burned_hook?.text ?? payload.text ?? null);
+                if (videoRef.current) videoRef.current.load();
+                setShowHookModal(false);
+            }
+        } catch (e) {
+            setEditError(e.message);
+            setTimeout(() => setEditError(null), 5000);
+        } finally {
+            setIsHooking(false);
+        }
+    };
+
+    // Strip the burned hook (auto-hook or manual) off the server file.
+    const handleRemoveHook = async () => {
+        setIsHooking(true);
+        setEditError(null);
+        try {
+            const res = await apiFetch('/api/hook', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    job_id: jobId,
+                    clip_index: index,
+                    remove: true,
+                    input_filename: serverVideoFile,
+                }),
+            });
+            if (!res.ok) throw new Error(await res.text());
+            const data = await res.json();
+            if (data.new_video_url) {
+                setCurrentVideoUrl(getApiUrl(data.new_video_url));
+                setServerVideoFile(data.new_video_url.split('/').pop());
+                setBurnedHook(null);
                 if (videoRef.current) videoRef.current.load();
                 setShowHookModal(false);
             }
@@ -1006,7 +1044,8 @@ export default function ResultCard({ clip, index, jobId, durableUrl, uploadPostK
                 existingSubtitles={activeLayers.subtitles}
                 hasCaptions={!!activeLayers.subtitles || /(^|_)subtitled_/.test(serverVideoFile || '')}
                 serverRender={hasServerBurns}
-                burnedHook={clip.auto_hook?.text}
+                burnedHook={burnedHook}
+                onRemove={burnedHook ? handleRemoveHook : null}
             />
 
             <TranslateModal

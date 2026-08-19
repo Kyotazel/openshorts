@@ -577,8 +577,9 @@ def get_video_resolution(video_path):
 # Byte budget for the sanitized video title used as the stem of every derived
 # file. Filesystems cap a name in BYTES (255 on ext4), not characters, and the
 # pipeline decorates this stem: "_clip_10.mp4" (12), "subtitled_<ts>_" (21),
-# "temp_hook_<hex8>_" (19), "autosubs_<ts>_" + ".ass" (24). Budgeting 120 bytes
-# leaves room for all of them stacked and still lands well under the limit.
+# "hooked_<ts>_" (18), "temp_hook_<hex8>_" (19), "autosubs_<ts>_" + ".ass" (24).
+# Budgeting 120 bytes leaves room for all of them stacked (worst chain:
+# subtitled_<ts>_hooked_<ts>_<stem>_clip_NN.mp4 ≈ 171 bytes) under the limit.
 #
 # The old cap was 100 CHARACTERS, which is 300 bytes of Bengali or Arabic — over
 # the limit before any decoration. It surfaced as OSError 36 killing the hook
@@ -883,13 +884,15 @@ def auto_caption_clip(clip_path, transcript, clip_start, clip_end):
 
 
 def auto_hook_clip(clip_path, clip):
-    """Burn the clip's Gemini hook text into the finished clip (AUTO_HOOK=1).
+    """Burn the clip's Gemini hook text as a DERIVED file (AUTO_HOOK=1).
 
-    In-place on the canonical clip file, BEFORE the watermark and captions
-    layers, so every existing derived-name convention (subtitled_/recut_
-    walk-backs, R2 archive, restore after redeploy) keeps working untouched.
+    Writes ``hooked_<ts>_<clip filename>`` next to the canonical clip, exactly
+    like captions write ``subtitled_<ts>_...``: the canonical stays clean, so
+    the hook can later be replaced or removed by walking the prefix back
+    (app.py `_strip_burned_hook`). Captions are then burned ON TOP of the
+    hooked file, keeping the "captions are always the last layer" invariant.
 
-    Returns the burned hook config dict, or None when skipped or failed — a
+    Returns (hooked_path, hook_config), or None when skipped or failed — a
     hook problem must never cost the user the clip itself (same fail-open
     contract as auto_caption_clip)."""
     text = (clip.get('viral_hook_text') or '').strip()
@@ -905,18 +908,13 @@ def auto_hook_clip(clip_path, clip):
         if style not in HOOK_STYLES:
             style = "classic"
         output_dir = os.path.dirname(clip_path)
-        tmp_path = os.path.join(
-            output_dir, f"temp_autohook_{uuid.uuid4().hex[:8]}.mp4")
-        try:
-            add_hook_to_video(clip_path, text, tmp_path, position="top",
-                              duration=seconds, style=style)
-            os.replace(tmp_path, clip_path)
-        finally:
-            if os.path.exists(tmp_path):
-                os.remove(tmp_path)
+        out_path = os.path.join(
+            output_dir, f"hooked_{int(time.time())}_{os.path.basename(clip_path)}")
+        add_hook_to_video(clip_path, text, out_path, position="top",
+                          duration=seconds, style=style)
         print(f"   🪝 Hook burned ({style}, {seconds:g}s): {text}")
-        return {"text": text, "style": style, "position": "top",
-                "duration_seconds": seconds}
+        return out_path, {"text": text, "style": style, "position": "top",
+                          "duration_seconds": seconds}
     except Exception as e:
         print(f"   ⚠️ Auto-hook failed ({type(e).__name__}: {e}) — "
               f"delivering the clip without it.")
@@ -1627,19 +1625,21 @@ if __name__ == '__main__':
                     subprocess.run(cut_command, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
 
                     success = render_clip(clip_temp_path, clip_final_path, output_format)
-                    # Hook first, under the watermark, and captions always
-                    # last. Each worker writes only its own clip dict, so the
-                    # re-dump after the pool is race-free.
-                    if success and os.environ.get("AUTO_HOOK") == "1":
-                        burned = auto_hook_clip(clip_final_path, clip)
-                        if burned:
-                            clip['auto_hook'] = burned
+                    # Layer order: watermark burns into the canonical (so any
+                    # later hook replacement, which re-derives from it, keeps
+                    # the branding), the hook is a derived hooked_ file, and
+                    # captions go last on top of whichever is current. Each
+                    # worker writes only its own clip dict, so the re-dump
+                    # after the pool is race-free.
                     if success and os.environ.get("WATERMARK") == "1":
                         apply_watermark(clip_final_path)
+                    deliver_path = clip_final_path
+                    if success and os.environ.get("AUTO_HOOK") == "1":
+                        hooked = auto_hook_clip(clip_final_path, clip)
+                        if hooked:
+                            deliver_path, clip['auto_hook'] = hooked
                     if success:
-                        # Captions last, so they sit on top of the watermark and
-                        # the canonical file stays clean for re-styling.
-                        auto_caption_clip(clip_final_path, transcript, start, end)
+                        auto_caption_clip(deliver_path, transcript, start, end)
                         print(f"   ✅ Clip {i+1} ready: {clip_final_path}")
                     return success
                 finally:

@@ -4,6 +4,7 @@ purge after the subscription grace period.
 import asyncio
 import glob
 import os
+import re
 from datetime import timedelta
 
 from fastapi import APIRouter, HTTPException, Request
@@ -72,6 +73,20 @@ async def archive_job(user_id, job_id, clips, output_dir):
                 except Exception as e:
                     print(f"⚠️  R2 upload failed for {clean_key}: {e}")
 
+        # A captioned hook is a chain (subtitled_<ts>_hooked_<ts>_<clean>):
+        # the hooked_ intermediate must come back too, or a restored project's
+        # caption restyle cannot walk back to the hook-only file and would
+        # silently drop or stack layers.
+        m = re.match(r'^subtitled_\d+_((?:hooked_\d+_|hook_).+)$', filename)
+        if m:
+            mid_path = os.path.join(output_dir, m.group(1))
+            if os.path.exists(mid_path):
+                mid_key = storage.job_key(user_id, job_id, m.group(1))
+                try:
+                    await asyncio.to_thread(storage.upload_file, mid_path, mid_key)
+                except Exception as e:
+                    print(f"⚠️  R2 upload failed for {mid_key}: {e}")
+
     if not uploaded:
         return
     async with database.session() as s:
@@ -127,6 +142,19 @@ async def archive_clip_edit(user_id, job_id, clip_index, output_dir, new_filenam
         return
     new_key = storage.job_key(user_id, job_id, new_filename)
     await asyncio.to_thread(storage.upload_file, local_path, new_key)
+
+    # Same chain rule as archive_job: a captioned hook needs its hooked_
+    # intermediate archived too, or the restored project cannot re-style.
+    m = re.match(r'^subtitled_\d+_((?:hooked_\d+_|hook_).+)$', new_filename)
+    if m:
+        mid_path = os.path.join(output_dir, m.group(1))
+        if os.path.exists(mid_path):
+            try:
+                await asyncio.to_thread(
+                    storage.upload_file, mid_path,
+                    storage.job_key(user_id, job_id, m.group(1)))
+            except Exception as e:
+                print(f"⚠️  R2 upload failed for hook intermediate of {job_id}: {e}")
 
     metadata_r2_key = None
     meta_files = glob.glob(os.path.join(output_dir, "*_metadata.json"))

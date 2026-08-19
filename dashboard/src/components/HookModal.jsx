@@ -39,7 +39,7 @@ function loadHookPrefs() {
     try { return JSON.parse(localStorage.getItem('os_hook_prefs')) || {}; } catch { return {}; }
 }
 
-export default function HookModal({ isOpen, onClose, onGenerate, isProcessing, videoUrl, initialText, durationInSeconds, existingSubtitles, hasCaptions, serverRender, burnedHook }) {
+export default function HookModal({ isOpen, onClose, onGenerate, onRemove, isProcessing, videoUrl, initialText, durationInSeconds, existingSubtitles, hasCaptions, serverRender, burnedHook }) {
     const prefs = loadHookPrefs();
     const [text, setText] = useState(initialText || 'POV: You are using the viral hook feature');
     const [position, setPosition] = useState(prefs.position || 'top');
@@ -224,9 +224,20 @@ export default function HookModal({ isOpen, onClose, onGenerate, isProcessing, v
                         </div>
 
                         {burnedHook && (
-                            <div className="p-3 border border-rule rounded-input text-xs text-warn">
-                                This clip already has a hook burned in ("{burnedHook}").
-                                Adding another will stack on top of it.
+                            <div className="p-3 border border-rule rounded-input text-xs text-muted space-y-2">
+                                <p>
+                                    This clip has a hook burned in ("{burnedHook}").
+                                    Generating replaces it with the new one.
+                                </p>
+                                {onRemove && (
+                                    <button
+                                        onClick={onRemove}
+                                        disabled={isProcessing}
+                                        className="text-warn underline underline-offset-2 hover:opacity-80 transition-opacity"
+                                    >
+                                        remove hook from clip
+                                    </button>
+                                )}
                             </div>
                         )}
 
