@@ -36,11 +36,19 @@ export interface SubtitleConfig {
 export type HookPosition = "top" | "center" | "bottom";
 export type HookSize = "S" | "M" | "L";
 export type HookEntrance = "spring" | "fade" | "slide-up" | "none";
+export type HookStyle =
+  | "classic"
+  | "dark"
+  | "yellow"
+  | "red"
+  | "outline"
+  | "outline_yellow";
 
 export interface HookConfig {
   text: string;
   position: HookPosition;
   size: HookSize;
+  style?: HookStyle;
   entranceAnimation: HookEntrance;
   displayDurationSec: number;
 }
@@ -102,6 +110,9 @@ export const hookConfigSchema = z.object({
   text: z.string(),
   position: z.enum(["top", "center", "bottom"]),
   size: z.enum(["S", "M", "L"]),
+  style: z
+    .enum(["classic", "dark", "yellow", "red", "outline", "outline_yellow"])
+    .default("classic"),
   entranceAnimation: z.enum(["spring", "fade", "slide-up", "none"]),
   displayDurationSec: z.number().positive(),
 });
