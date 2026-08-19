@@ -602,6 +602,26 @@ def sanitize_filename(filename):
     return truncate_bytes(filename, MAX_TITLE_BYTES)
 
 
+def plan_download_attempts(direct_first, statics, paid, have_hd):
+    """Ordered (label, capped, proxy) download plan — pure, unit-tested.
+
+    Cheapest bandwidth first: the server's own IP, then the flat-rate static
+    ISP proxies (uncapped 1080p, free bytes), then the per-GB paid proxy
+    (720p cost cap), and last the conservative fallback strategy through the
+    paid proxy (or a static/direct when no paid proxy is configured).
+    ``capped`` marks attempts whose bytes are billed per GB."""
+    plan = []
+    if direct_first:
+        plan.append(('HD-direct', False, None))
+    if have_hd:
+        for i, s in enumerate(statics):
+            plan.append((f'HD-static{i + 1}', False, s))
+        plan.append(('HD', bool(paid), paid))
+    plan.append(('fallback', bool(paid),
+                 paid if paid else (statics[0] if statics else None)))
+    return plan
+
+
 def download_youtube_video(url, output_dir="."):
     """
     Downloads a YouTube video using yt-dlp.
@@ -640,6 +660,20 @@ def download_youtube_video(url, output_dir="."):
     if _proxy:
         print("🌐 Using proxy for download.")
 
+    # Flat-rate static ISP proxies (STATIC_PROXY_URLS, comma-separated), tried
+    # BEFORE the per-GB proxy: dedicated IPs with unlimited traffic, so their
+    # bandwidth costs nothing per job and carries no 720p cost cap. Rotated per
+    # job to spread load (and YouTube's attention) across the pool. PROXY_URL
+    # stays the paid last resort — with STATIC_PROXY_URLS unset the behavior is
+    # byte-identical to before.
+    _statics = [p.strip() for p in
+                os.environ.get("STATIC_PROXY_URLS", "").split(",") if p.strip()]
+    if _statics:
+        import random as _random
+        k = _random.randrange(len(_statics))
+        _statics = _statics[k:] + _statics[:k]
+        print(f"🌐 {len(_statics)} static ISP proxies configured.")
+
     # Two download strategies, tried in order so a break in the HD path degrades
     # gracefully instead of failing the whole job: an HD attempt first, then a
     # conservative fallback (also the only strategy for self-host).
@@ -658,15 +692,16 @@ def download_youtube_video(url, output_dir="."):
         }
     }
 
-    # Cap at 720p ONLY when the bytes actually go through the paid proxy — that
-    # cap exists to control bandwidth cost, and the direct attempt has none.
+    # Cap at 720p ONLY when the bytes actually go through the PER-GB paid proxy
+    # — that cap exists to control bandwidth cost, and the direct attempt and
+    # the flat-rate static proxies have none.
     #
     # This is per-attempt on purpose. Deciding it once from `_proxy` capped the
     # DIRECT attempt too, so with DIRECT_FIRST=1 (which serves most downloads)
     # every YouTube source arrived at 720p and, since the reframe inherits the
     # source height, 80% of delivered clips came out 406x720 (audited 25-jul-2026).
-    def _hd_fmt_for(proxy):
-        if proxy:
+    def _hd_fmt_for(capped):
+        if capped:
             return ('bestvideo[vcodec^=avc1][height<=720][ext=mp4]+bestaudio[ext=m4a]/'
                     'bestvideo[vcodec^=avc1][height<=720]+bestaudio/'
                     'best[height<=720][ext=mp4]/best[height<=720]/best')
@@ -723,13 +758,16 @@ def download_youtube_video(url, output_dir="."):
     # Needs cookies + a PO-token provider — without both, YouTube flags the
     # datacenter IP after the first request (verified in prod, 21-jul-2026).
     _direct_first = (os.environ.get("DIRECT_FIRST", "").strip() == "1"
-                     and _proxy and hd_args and cookies_path)
+                     and (_proxy or _statics) and hd_args and cookies_path)
 
-    attempts = (
-        ([('HD-direct', hd_args, _hd_fmt_for(None), None)] if _direct_first else [])
-        + ([('HD', hd_args, _hd_fmt_for(_proxy), _proxy)] if hd_args else [])
-        + [('fallback', fallback_args, fallback_fmt, _proxy)]
-    )
+    attempts = [
+        (label,
+         fallback_args if label == 'fallback' else hd_args,
+         fallback_fmt if label == 'fallback' else _hd_fmt_for(capped),
+         proxy)
+        for label, capped, proxy in plan_download_attempts(
+            _direct_first, _statics, _proxy, bool(hd_args))
+    ]
 
     sanitized_title = None
     last_err = None
@@ -743,7 +781,10 @@ def download_youtube_video(url, output_dir="."):
             try:
                 print(f"📥 Download attempt: {label}" + (f" (retry {retry})" if retry else ""))
                 sanitized_title = _attempt(ea, fmt, proxy)
-                used_proxy = proxy is not None
+                # Only bytes through the PER-GB proxy cost money; direct and
+                # the flat-rate static proxies are free bandwidth for the
+                # monthly counter's purposes.
+                used_proxy = proxy is not None and proxy == _proxy
                 print(f"✅ Download succeeded ({label}).")
                 break
             except Exception as e:

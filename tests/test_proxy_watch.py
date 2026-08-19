@@ -1,9 +1,9 @@
-"""Proxy balance watcher: alert on down, nag until topped up, confirm recovery.
+"""Proxy watcher: alert on down, nag until fixed, confirm recovery.
 
 Born from the 19-aug-2026 incident: DataImpulse ran out of traffic
 (407 TRAFFIC_EXHAUSTED), every YouTube-URL job failed, and nobody was told
-more than once. The watcher must keep nagging while the proxy is down and
-close the loop when it answers again.
+more than once. The watcher probes every configured route (static ISP pool
+first, per-GB paid proxy last) and keeps nagging while one is down.
 """
 import asyncio
 
@@ -18,82 +18,116 @@ def _run(coro):
 
 @pytest.fixture(autouse=True)
 def _reset_state(monkeypatch):
-    alerts._proxy_down_since = None
-    alerts._proxy_last_nag = 0.0
+    alerts._watch_down.clear()
+    alerts._watch_nag.clear()
     alerts._last_alert.clear()
     sent = []
 
     async def fake_alert(subject, body):
-        sent.append(subject)
+        sent.append((subject, body))
 
     monkeypatch.setattr(alerts, "send_admin_alert", fake_alert)
     yield sent
-    alerts._proxy_down_since = None
-    alerts._proxy_last_nag = 0.0
+    alerts._watch_down.clear()
+    alerts._watch_nag.clear()
 
 
-def _probe_returning(value):
-    async def fake_probe():
-        return value
+def _probes(results):
+    """Fake _probe_one returning per-url results (dict url -> (ok, detail))."""
+    async def fake_probe(url):
+        return results[url]
     return fake_probe
 
 
-class TestProxyWatchTick:
-    def test_no_proxy_configured_is_silent(self, _reset_state, monkeypatch):
-        monkeypatch.setattr(alerts, "_probe_proxy", _probe_returning(None))
+class TestWatchTargets:
+    def test_no_env_no_targets(self, monkeypatch):
+        monkeypatch.delenv("STATIC_PROXY_URLS", raising=False)
+        monkeypatch.delenv("PROXY_URL", raising=False)
+        assert alerts._watch_targets() == []
+
+    def test_both_pools_in_order(self, monkeypatch):
+        monkeypatch.setenv("STATIC_PROXY_URLS", "http://s1, http://s2 ,")
+        monkeypatch.setenv("PROXY_URL", "http://paid")
+        assert alerts._watch_targets() == [
+            (alerts._STATIC_TARGET, ["http://s1", "http://s2"]),
+            (alerts._PAID_TARGET, ["http://paid"]),
+        ]
+
+
+class TestWatchTick:
+    def _env(self, monkeypatch, statics="http://s1,http://s2", paid="http://paid"):
+        if statics:
+            monkeypatch.setenv("STATIC_PROXY_URLS", statics)
+        else:
+            monkeypatch.delenv("STATIC_PROXY_URLS", raising=False)
+        if paid:
+            monkeypatch.setenv("PROXY_URL", paid)
+        else:
+            monkeypatch.delenv("PROXY_URL", raising=False)
+
+    def test_all_healthy_is_silent(self, _reset_state, monkeypatch):
+        self._env(monkeypatch)
+        monkeypatch.setattr(alerts, "_probe_one", _probes({
+            "http://s1": (True, ""), "http://paid": (True, "")}))
         _run(alerts.proxy_watch_tick())
         assert _reset_state == []
-        assert alerts._proxy_down_since is None
 
-    def test_healthy_proxy_is_silent(self, _reset_state, monkeypatch):
-        monkeypatch.setattr(alerts, "_probe_proxy", _probe_returning((True, "")))
+    def test_pool_is_up_if_any_ip_answers(self, _reset_state, monkeypatch):
+        self._env(monkeypatch)
+        monkeypatch.setattr(alerts, "_probe_one", _probes({
+            "http://s1": (False, "HTTP 407"), "http://s2": (True, ""),
+            "http://paid": (True, "")}))
         _run(alerts.proxy_watch_tick())
         assert _reset_state == []
 
-    def test_first_failure_alerts_once(self, _reset_state, monkeypatch):
-        monkeypatch.setattr(
-            alerts, "_probe_proxy",
-            _probe_returning((False, "HTTP 407 TRAFFIC_EXHAUSTED")))
+    def test_static_pool_down_alerts_with_cost_hint(self, _reset_state, monkeypatch):
+        self._env(monkeypatch)
+        monkeypatch.setattr(alerts, "_probe_one", _probes({
+            "http://s1": (False, "boom"), "http://s2": (False, "boom"),
+            "http://paid": (True, "")}))
         _run(alerts.proxy_watch_tick())
-        _run(alerts.proxy_watch_tick())  # next probe, renotify window not due
+        _run(alerts.proxy_watch_tick())  # renotify window not due yet
         assert len(_reset_state) == 1
-        assert "DOWN" in _reset_state[0]
-        assert alerts._proxy_down_since is not None
+        subject, body = _reset_state[0]
+        assert alerts._STATIC_TARGET in subject and "DOWN" in subject
+        assert "costs money" in body
 
-    def test_nags_again_after_renotify_window(self, _reset_state, monkeypatch):
-        monkeypatch.setattr(
-            alerts, "_probe_proxy", _probe_returning((False, "HTTP 407")))
+    def test_paid_down_alerts_and_nags_after_window(self, _reset_state, monkeypatch):
+        self._env(monkeypatch, statics=None)
+        monkeypatch.setattr(alerts, "_probe_one", _probes({
+            "http://paid": (False, "HTTP 407")}))
         _run(alerts.proxy_watch_tick())
-        # Pretend the last nag was over the renotify window ago.
-        alerts._proxy_last_nag -= alerts._PROXY_RENOTIFY + 1
+        alerts._watch_nag[alerts._PAID_TARGET] -= alerts._PROXY_RENOTIFY + 1
         _run(alerts.proxy_watch_tick())
         assert len(_reset_state) == 2
-        assert "STILL down" in _reset_state[1]
+        assert "STILL down" in _reset_state[1][0]
 
     def test_recovery_confirms_and_resets(self, _reset_state, monkeypatch):
-        monkeypatch.setattr(
-            alerts, "_probe_proxy", _probe_returning((False, "HTTP 407")))
+        self._env(monkeypatch, statics=None)
+        monkeypatch.setattr(alerts, "_probe_one", _probes({
+            "http://paid": (False, "HTTP 407")}))
         _run(alerts.proxy_watch_tick())
-        monkeypatch.setattr(alerts, "_probe_proxy", _probe_returning((True, "")))
+        monkeypatch.setattr(alerts, "_probe_one", _probes({
+            "http://paid": (True, "")}))
         _run(alerts.proxy_watch_tick())
-        assert any("recovered" in s for s in _reset_state)
-        assert alerts._proxy_down_since is None
+        assert any("recovered" in s for s, _ in _reset_state)
+        assert not alerts._watch_down.get(alerts._PAID_TARGET)
         # A later failure is a NEW incident and alerts again.
-        monkeypatch.setattr(
-            alerts, "_probe_proxy", _probe_returning((False, "HTTP 407")))
+        monkeypatch.setattr(alerts, "_probe_one", _probes({
+            "http://paid": (False, "HTTP 407")}))
         _run(alerts.proxy_watch_tick())
-        assert sum("DOWN" in s for s in _reset_state) == 2
+        assert sum("DOWN" in s for s, _ in _reset_state) == 2
 
 
 class TestJobFailureOpensIncident:
-    def test_proxy_job_error_opens_incident_and_alerts(self, _reset_state):
+    def test_proxy_job_error_opens_paid_incident_and_alerts(self, _reset_state):
         _run(alerts.record_job_outcome(
             False,
             "yt_dlp.utils.DownloadError: Unable to connect to proxy "
             "('Tunnel connection failed: 407 TRAFFIC_EXHAUSTED')"))
-        assert alerts._proxy_down_since is not None
+        assert alerts._watch_down.get(alerts._PAID_TARGET)
         assert len(_reset_state) == 1
 
     def test_non_proxy_error_leaves_incident_closed(self, _reset_state):
         _run(alerts.record_job_outcome(False, "ffmpeg exploded"))
-        assert alerts._proxy_down_since is None
+        assert not alerts._watch_down.get(alerts._PAID_TARGET)

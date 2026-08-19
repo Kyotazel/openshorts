@@ -119,7 +119,6 @@ async def send_admin_alert(subject: str, body: str):
 
 async def record_job_outcome(ok: bool, error_text: str = ""):
     """Record a managed job's result and fire an alert if the picture looks bad."""
-    global _proxy_down_since, _proxy_last_nag
     _recent.append(bool(ok))
     if ok:
         return
@@ -129,9 +128,9 @@ async def record_job_outcome(ok: bool, error_text: str = ""):
     # (one alert at 3am is easy to miss; an exhausted proxy takes all
     # YouTube-URL ingest down until someone tops it up).
     if _looks_like_proxy_error(error_text):
-        if not _proxy_down_since:
-            _proxy_down_since = time.time()
-            _proxy_last_nag = time.time()
+        if not _watch_down.get(_PAID_TARGET):
+            _watch_down[_PAID_TARGET] = time.time()
+            _watch_nag[_PAID_TARGET] = time.time()
         if _cooldown_ok("proxy"):
             await send_admin_alert(
                 "🔴 Proxy error — may be out of credits",
@@ -155,13 +154,18 @@ async def record_job_outcome(ok: bool, error_text: str = ""):
         )
 
 
-# --- Proxy balance watcher ----------------------------------------------------
-# An exhausted residential proxy takes ALL YouTube-URL ingest down (when the
-# datacenter IP is blocked, the proxy is the only working route), and a single
-# alert at the moment it dies is easy to miss. This watcher probes the proxy on
-# a schedule, keeps nagging on Telegram until the balance is topped up, and
-# confirms recovery — so exhaustion is caught even before the next user job
-# fails (incident of 19-aug-2026: 407 TRAFFIC_EXHAUSTED, found by accident).
+# --- Proxy watcher --------------------------------------------------------------
+# A dead download route takes YouTube-URL ingest down (or silently moves it to
+# per-GB billing), and a single alert at the moment it dies is easy to miss.
+# The watcher probes every configured route on a schedule, keeps nagging on
+# Telegram until it's fixed, and confirms recovery (incident of 19-aug-2026:
+# DataImpulse 407 TRAFFIC_EXHAUSTED, found by accident hours later).
+#
+# Watched targets:
+# - "static proxy pool" (STATIC_PROXY_URLS): flat-rate ISP IPs, the primary
+#   route. Ingest still works when they die (paid fallback) but every GB
+#   starts costing money — that's worth a nag of its own.
+# - "paid proxy" (PROXY_URL): the per-GB last resort; dead = ingest at risk.
 _PROXY_PROBE_INTERVAL = 1800        # seconds between probes (30 min)
 _PROXY_RENOTIFY = 7200              # keep nagging every 2 h while it stays down
 # 204-No-Content endpoint: the probe costs a handful of bytes of paid traffic.
@@ -170,16 +174,28 @@ _PROXY_RENOTIFY = 7200              # keep nagging every 2 h while it stays down
 # with it), which would make an HTTPS probe cry wolf. An exhausted balance
 # rejects the request before forwarding, so HTTP still detects the 407.
 _PROXY_PROBE_URL = "http://www.google.com/generate_204"
-_proxy_down_since = None
-_proxy_last_nag = 0.0
+_watch_down = {}                    # target name -> down-since epoch
+_watch_nag = {}                     # target name -> last-nag epoch
+
+_PAID_TARGET = "paid proxy"
+_STATIC_TARGET = "static proxy pool"
 
 
-async def _probe_proxy():
-    """(ok, detail) for one cheap request through the residential proxy, or
-    None when no proxy is configured (nothing to watch)."""
-    proxy = os.environ.get("PROXY_URL", "").strip()
-    if not proxy:
-        return None
+def _watch_targets():
+    """[(name, [proxy urls])] — a target is up if ANY of its urls answers."""
+    targets = []
+    statics = [p.strip() for p in
+               os.environ.get("STATIC_PROXY_URLS", "").split(",") if p.strip()]
+    if statics:
+        targets.append((_STATIC_TARGET, statics))
+    paid = os.environ.get("PROXY_URL", "").strip()
+    if paid:
+        targets.append((_PAID_TARGET, [paid]))
+    return targets
+
+
+async def _probe_one(proxy):
+    """(ok, detail) for one cheap request through one proxy."""
     try:
         import httpx
         async with httpx.AsyncClient(proxy=proxy, timeout=20) as client:
@@ -191,44 +207,51 @@ async def _probe_proxy():
         return False, f"{type(e).__name__}: {e}"
 
 
-async def proxy_watch_tick():
-    """One probe cycle: open the incident, nag while down, confirm recovery."""
-    global _proxy_down_since, _proxy_last_nag
-    result = await _probe_proxy()
-    if result is None:
-        return
-    ok, detail = result
+async def _watch_update(name, ok, detail):
+    """Shared incident state machine: alert on down, nag, confirm recovery."""
     now = time.time()
     if ok:
-        if _proxy_down_since:
-            mins = int((now - _proxy_down_since) / 60)
+        if _watch_down.get(name):
+            mins = int((now - _watch_down[name]) / 60)
             await send_admin_alert(
-                "✅ Proxy recovered",
-                f"The residential proxy answers again after ~{mins} min down. "
-                "YouTube-URL ingest should be back.",
+                f"✅ {name} recovered",
+                f"The {name} answers again after ~{mins} min down.",
             )
-            _proxy_down_since = None
-            _proxy_last_nag = 0.0
+            _watch_down[name] = None
+            _watch_nag[name] = 0.0
         return
-    if not _proxy_down_since:
-        _proxy_down_since = now
-        _proxy_last_nag = now
+    hint = ("YouTube-URL jobs are falling back to the PER-GB paid proxy — "
+            "ingest still works but every download now costs money."
+            if name == _STATIC_TARGET else
+            "YouTube-URL jobs will keep failing on this route until it's "
+            "topped up / fixed.")
+    if not _watch_down.get(name):
+        _watch_down[name] = now
+        _watch_nag[name] = now
         await send_admin_alert(
-            "🔴 Proxy DOWN — likely out of credits",
-            "The residential proxy probe failed. YouTube-URL jobs will keep "
-            "failing until the balance is topped up.\n"
-            "This alert repeats every 2 h until the proxy answers again.\n\n"
+            f"🔴 {name} DOWN",
+            f"The {name} probe failed. {hint}\n"
+            "This alert repeats every 2 h until it answers again.\n\n"
             f"Probe error: {detail[:400]}",
         )
-    elif now - _proxy_last_nag >= _PROXY_RENOTIFY:
-        _proxy_last_nag = now
-        hours = (now - _proxy_down_since) / 3600
+    elif now - _watch_nag[name] >= _PROXY_RENOTIFY:
+        _watch_nag[name] = now
+        hours = (now - _watch_down[name]) / 3600
         await send_admin_alert(
-            f"🔴 Proxy STILL down ({hours:.1f} h)",
-            "The residential proxy still fails — YouTube-URL ingest remains "
-            "broken until the balance is topped up.\n\n"
-            f"Probe error: {detail[:400]}",
+            f"🔴 {name} STILL down ({hours:.1f} h)",
+            f"{hint}\n\nProbe error: {detail[:400]}",
         )
+
+
+async def proxy_watch_tick():
+    """One probe cycle over every configured route."""
+    for name, urls in _watch_targets():
+        ok, detail = False, "no urls"
+        for u in urls:
+            ok, detail = await _probe_one(u)
+            if ok:
+                break
+        await _watch_update(name, ok, detail)
 
 
 async def proxy_watch_loop():
