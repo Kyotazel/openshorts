@@ -177,9 +177,7 @@ settings, which revokes our access.</p>
 <p>Paid subscriptions and minute top-ups are billed by Stripe; we never see or
 store your card number. Prices are shown with any applicable taxes indicated at
 checkout. Subscriptions renew automatically at the end of each billing period
-until you cancel. We email you a renewal reminder at least 15 days before each
-renewal charge, stating the amount and date and linking to one-click
-cancellation, as required by Spanish consumer law. You can cancel at any time
+until you cancel. You can cancel at any time
 from your account page, as easily as you subscribed; cancellation takes effect
 at the end of the current period, which you keep using in full. Unused quota
 does not roll over unless the plan says otherwise. We will give you at least 30
@@ -417,9 +415,7 @@ nuestro acceso.</p>
 <p>Las suscripciones y recargas de pago se facturan a través de Stripe; nunca
 vemos ni almacenamos tu número de tarjeta. Los precios indican en el proceso de
 pago los impuestos aplicables. Las suscripciones se renuevan automáticamente al
-final de cada periodo hasta que canceles. Te enviaremos un aviso de renovación
-por email al menos 15 días naturales antes de cada cargo, con el importe, la
-fecha y un enlace de cancelación, conforme al artículo 97.1.p del TRLGDCU.
+final de cada periodo hasta que canceles.
 Puedes cancelar en cualquier momento desde tu cuenta, con la misma facilidad
 con la que te suscribiste; la cancelación surte efecto al final del periodo en
 curso, que sigues disfrutando íntegro. La cuota no consumida no se acumula
@@ -856,7 +852,7 @@ export function legalPages() {
       tldr: [
         'You own your videos and the clips we generate from them. We never use your content to train AI models.',
         'You must hold the rights to every video you upload or link, and you are the publisher of everything you post through the service.',
-        'Subscriptions renew automatically with a 15-day email reminder; cancel anytime from your account. EU consumers keep their 14-day withdrawal right.',
+        'Subscriptions renew automatically until you cancel, which you can do anytime from your account. EU consumers keep their 14-day withdrawal right.',
       ],
       body: TERMS_EN,
     },
@@ -903,7 +899,7 @@ export function legalPages() {
       tldr: [
         'Tus vídeos y los clips que generamos a partir de ellos son tuyos. Nunca usamos tu contenido para entrenar modelos de IA.',
         'Debes tener derechos sobre cada vídeo que subes o enlazas, y eres el editor de todo lo que publiques a través del servicio.',
-        'Las suscripciones se renuevan automáticamente con aviso por email 15 días antes; cancela cuando quieras desde tu cuenta. Los consumidores de la UE conservan su derecho de desistimiento de 14 días.',
+        'Las suscripciones se renuevan automáticamente hasta que canceles, y puedes cancelar cuando quieras desde tu cuenta. Los consumidores de la UE conservan su derecho de desistimiento de 14 días.',
       ],
       body: TERMS_ES,
     },
