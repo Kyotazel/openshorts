@@ -260,8 +260,8 @@ def _run_ffmpeg(command):
 
 def perform_recut(*, input_path, segments, output_dir, clean_name,
                   reframe=False, output_format="auto", watermark=False,
-                  captions_transcript=None, runner=None, renderer=None,
-                  watermarker=None, captioner=None):
+                  captions_transcript=None, crop_overrides=None, runner=None,
+                  renderer=None, watermarker=None, captioner=None):
     """Render a recut clip. Returns (served_filename, clean_filename).
 
     - ``input_path``/``segments``: the file to cut from and the times ON THAT
@@ -274,6 +274,10 @@ def perform_recut(*, input_path, segments, output_dir, clean_name,
       ``virtual_transcript``); when given and non-empty, captions are burned
       LAST onto a ``subtitled_<ts>_`` derivative, preserving the invariant
       that the clean file stays clean for later re-styling.
+    - ``crop_overrides``: scene index -> crop centre as a fraction of the
+      source width, for scenes the user framed by hand. Source path only, for
+      the same reason as ``reframe``: the canonical file is already cropped, so
+      its framing can no longer be changed.
 
     The renderer/watermarker/captioner hooks default to main.py's
     implementations, imported lazily so this module stays importable without
@@ -293,7 +297,11 @@ def perform_recut(*, input_path, segments, output_dir, clean_name,
 
         if reframe:
             render = renderer or _main_attr("render_clip")
-            if not render(work_path, out_path, output_format):
+            # Passed only when there is something to pass: injected test
+            # renderers take the three positional arguments and would break on
+            # an unexpected keyword.
+            extra = {"crop_overrides": crop_overrides} if crop_overrides else {}
+            if not render(work_path, out_path, output_format, **extra):
                 raise RuntimeError("reframe failed on the recut clip")
         else:
             shutil.move(work_path, out_path)

@@ -882,13 +882,15 @@ def auto_caption_clip(clip_path, transcript, clip_start, clip_end):
         return None
 
 
-def render_clip(input_video, final_output_video, output_format="auto"):
+def render_clip(input_video, final_output_video, output_format="auto",
+                crop_overrides=None):
     """Route a cut clip through the right renderer for the chosen output format.
     vertical/auto -> 9:16 reframe, square -> 1:1 reframe, horizontal -> keep."""
     if output_format == "horizontal":
         return finalize_clip_passthrough(input_video, final_output_video)
     aspect = 1.0 if output_format == "square" else ASPECT_RATIO
-    return process_video_to_vertical(input_video, final_output_video, aspect_ratio=aspect)
+    return process_video_to_vertical(input_video, final_output_video, aspect_ratio=aspect,
+                                     crop_overrides=crop_overrides)
 
 
 # Watermark geometry, as fractions of the clip width/height.
@@ -956,7 +958,8 @@ def apply_watermark(video_path):
     return False
 
 
-def process_video_to_vertical(input_video, final_output_video, aspect_ratio=ASPECT_RATIO):
+def process_video_to_vertical(input_video, final_output_video, aspect_ratio=ASPECT_RATIO,
+                              crop_overrides=None):
     """
     Core logic to reframe a horizontal video to a target aspect ratio using
     scene detection and Active Speaker Tracking (MediaPipe).
@@ -970,10 +973,19 @@ def process_video_to_vertical(input_video, final_output_video, aspect_ratio=ASPE
         try:
             import reframe_v2
             t0 = time.time()
-            result = reframe_v2.render(input_video, final_output_video, aspect_ratio)
+            result = reframe_v2.render(input_video, final_output_video, aspect_ratio,
+                                       crop_overrides=crop_overrides)
             print(f"   ⏱️ Reframe v2 total: {time.time() - t0:.1f}s")
             return result
         except Exception as e:
+            # Only v2 honours hand-framed scenes. Falling through to v1 would
+            # quietly return an automatically framed clip, and the user would
+            # see their correction vanish with no reason given — so surface the
+            # failure instead of silently discarding their input.
+            if crop_overrides:
+                raise RuntimeError(
+                    f"manual framing needs the v2 reframe engine, which failed "
+                    f"({type(e).__name__}: {e})") from e
             print(f"   ⚠️ Reframe v2 failed ({type(e).__name__}: {e}) — "
                   f"falling back to v1 frame loop")
 
