@@ -165,7 +165,11 @@ async def record_job_outcome(ok: bool, error_text: str = ""):
 _PROXY_PROBE_INTERVAL = 1800        # seconds between probes (30 min)
 _PROXY_RENOTIFY = 7200              # keep nagging every 2 h while it stays down
 # 204-No-Content endpoint: the probe costs a handful of bytes of paid traffic.
-_PROXY_PROBE_URL = "https://www.google.com/generate_204"
+# Plain HTTP on purpose: HTTPS through DataImpulse fails in httpx with an SSL
+# record-layer error even when the proxy is healthy (yt-dlp's stack is fine
+# with it), which would make an HTTPS probe cry wolf. An exhausted balance
+# rejects the request before forwarding, so HTTP still detects the 407.
+_PROXY_PROBE_URL = "http://www.google.com/generate_204"
 _proxy_down_since = None
 _proxy_last_nag = 0.0
 
