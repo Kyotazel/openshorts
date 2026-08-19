@@ -159,14 +159,18 @@ def virtual_transcript(transcript, segments):
             if w["e"] <= seg_start or w["s"] >= seg_end:
                 continue
             words.append({
-                "word": w["w"],
+                # Leading space = Whisper's word-boundary convention.
+                # transcript_words() strips it, and without it the caption
+                # block collector treats every word as a continuation fragment
+                # and burns the whole line glued together.
+                "word": " " + w["w"],
                 "start": round(max(0.0, w["s"] - seg_start) + offset, 3),
                 "end": round(min(seg_duration, w["e"] - seg_start) + offset, 3),
             })
         out_segments.append({
             "start": round(offset, 3),
             "end": round(offset + seg_duration, 3),
-            "text": " ".join(w["word"] for w in words),
+            "text": "".join(w["word"] for w in words).strip(),
             "words": words,
         })
         offset += seg_duration
