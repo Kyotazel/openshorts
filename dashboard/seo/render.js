@@ -148,7 +148,7 @@ const articleNode = (page) => ({
   description: page.description,
   datePublished: page.published || SITE.published,
   dateModified: page.updated || SITE.updated,
-  inLanguage: 'en-US',
+  inLanguage: page.lang === 'es' ? 'es-ES' : 'en-US',
   mainEntityOfPage: `${SITE.url}${page.path}`,
   author: { '@id': `${SITE.url}/#organization` },
   publisher: { '@id': `${SITE.url}/#organization` },
@@ -232,7 +232,7 @@ export function renderPage(page, related = []) {
   ].join(' <span aria-hidden="true">/</span> ')
 
   return `<!doctype html>
-<html lang="en">
+<html lang="${page.lang || 'en'}">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">

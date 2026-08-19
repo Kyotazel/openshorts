@@ -17,6 +17,7 @@
 
 import { SITE } from './seo/data.js'
 import { buildPages, relatedFor } from './seo/pages.js'
+import { legalPages } from './seo/legal.js'
 import { renderPage } from './seo/render.js'
 import { LANDING_FALLBACK } from './seo/landing-fallback.js'
 
@@ -125,8 +126,21 @@ export default function seoPlugin() {
         })
       }
 
-      this.emitFile({ type: 'asset', fileName: 'sitemap.xml', source: sitemapXml(pages) })
-      this.emitFile({ type: 'asset', fileName: 'llms.txt', source: llmsTxt(pages) })
+      // Legal pages (terms/privacy/legal notice, EN+ES): indexed and present in
+      // the sitemap and llms.txt, but OUT of the marketing interlinking ring —
+      // they are linked from the footer, where readers expect them.
+      const legal = legalPages()
+      for (const page of legal) {
+        this.emitFile({
+          type: 'asset',
+          fileName: `${page.path.replace(/^\//, '')}.html`,
+          source: renderPage(page, []),
+        })
+      }
+
+      const allPages = pages.concat(legal)
+      this.emitFile({ type: 'asset', fileName: 'sitemap.xml', source: sitemapXml(allPages) })
+      this.emitFile({ type: 'asset', fileName: 'llms.txt', source: llmsTxt(allPages) })
 
       // Served by nginx's error_page for unknown paths. Kept out of `pages` so
       // it never reaches the sitemap or llms.txt, and marked noindex, because a
