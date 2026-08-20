@@ -102,11 +102,8 @@ RUN chown -R appuser:appuser /app /tmp/Ultralytics
 # Switch to non-root user
 USER appuser
 
-# Pre-download YOLO model on build (now running as appuser). Baked into
-# /tmp/Ultralytics instead of the workdir so a volume mounted over /app can't
-# shadow it and force a re-download at startup.
-ENV YOLO_MODEL_PATH=/tmp/Ultralytics/yolov8n.pt
-RUN python -c "from ultralytics import YOLO; YOLO('/tmp/Ultralytics/yolov8n.pt')"
+# Pre-download YOLO model on build (now running as appuser)
+RUN python -c "from ultralytics import YOLO; YOLO('yolov8n.pt')"
 
 # Expose FastAPI port
 EXPOSE 8000
