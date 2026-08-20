@@ -273,6 +273,8 @@ export default function Landing({ onLaunchApp }) {
 
             <p className="hero-description text-muted max-w-2xl mb-8 leading-relaxed lowercase">
               turn long videos into viral 9:16 shorts, or generate ugc marketing videos with ai actors. online, in the cloud, zero setup.
+              also a clipping tool for ai agents: claude, chatgpt and n8n drive it over{' '}
+              <a href="/mcp" className="text-ink2 underline underline-offset-4 decoration-rule hover:text-ink hover:decoration-brass transition-colors">mcp</a>.
             </p>
 
             {/* The hero CTA is the product itself: paste a link and land in the
