@@ -37,7 +37,7 @@ def main() -> int:
     parser.add_argument("--url", required=True)
     args = parser.parse_args()
 
-    result = {"max_height": 0, "mode": None, "cookies_invalid": False}
+    result = {"max_height": 0, "mode": None, "cookies_invalid": False, "duration": 0}
     try:
         import yt_dlp
 
@@ -90,6 +90,8 @@ def main() -> int:
                 if max_height > result["max_height"]:
                     result["max_height"] = max_height
                     result["mode"] = mode
+                if not result["duration"]:
+                    result["duration"] = int(info.get('duration') or 0)
                 if result["max_height"] >= 1080:
                     break
             except Exception:

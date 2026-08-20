@@ -56,6 +56,11 @@ UPLOADS_MAX_GB = int(os.environ.get("UPLOADS_MAX_GB", "15"))
 # Pre-flight quality gate: warn before processing a YouTube source below this
 # height (0 disables). Only applies to URLs; uploads are whatever the user gave.
 QUALITY_GATE_MIN_HEIGHT = int(os.environ.get("QUALITY_GATE_MIN_HEIGHT", "720"))
+# Reject sources shorter than this before starting (0 disables). A 24s YouTube
+# Short cannot yield 15-60s clips: Gemini returns nothing, the job burns
+# managed minutes and dies with "no usable clips" (prod 20-ago: 3 of 5 recent
+# failures were exactly this, one user retrying the same 24s video).
+MIN_SOURCE_SECONDS = int(os.environ.get("MIN_SOURCE_SECONDS", "45"))
 QUALITY_PROBE_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "quality_probe.py")
 DISABLE_YOUTUBE_URL = os.environ.get("DISABLE_YOUTUBE_URL", "false").lower() in ("1", "true", "yes")
 
@@ -962,7 +967,10 @@ async def _notify_clip_activity(job_id):
 
 
 # Markers that identify a line as an actual error rather than progress noise.
-_ERROR_MARKERS = ("❌", "ERROR:", "Traceback", "FATAL", "Exception",
+# "Error:" (capital E) catches raised exception lines — RuntimeError:,
+# DownloadError:, GeminiBlockedError: — which "ERROR:" alone missed, leaving
+# alerts with a bare "Traceback ... exit code 1" and no cause (prod 20-ago).
+_ERROR_MARKERS = ("❌", "ERROR:", "Error:", "Traceback", "FATAL", "Exception",
                   "Process failed with exit code", "No metadata file generated",
                   "Execution error:")
 
@@ -975,7 +983,15 @@ def _job_error_text(logs) -> str:
     a silent upload got reported as a broken download path, and a Gemini blip
     as an ffmpeg problem. Pick the error-bearing lines instead, newest last.
     """
-    hits = [ln for ln in logs if any(m in ln for m in _ERROR_MARKERS)]
+    # Per-attempt download warnings are only noise when a later attempt
+    # RECOVERED: HD-direct fails on every job (banned server IP) and a static
+    # proxy takes over, yet its "Video unavailable" made whole alerts read as
+    # download outages when the job actually died in Gemini. When no attempt
+    # succeeded, those lines carry the real cause and must stay.
+    recovered = any("Download succeeded" in ln for ln in logs)
+    hits = [ln for ln in logs
+            if any(m in ln for m in _ERROR_MARKERS)
+            and not (recovered and "Download attempt" in ln)]
     if not hits:
         return " ".join(logs[-10:])  # nothing recognisable — fall back to the tail
     return " ".join(hits[-6:])
@@ -1418,6 +1434,25 @@ async def _probe_youtube_quality(url: str) -> dict:
     return await loop.run_in_executor(None, _run)
 
 
+def _media_duration_seconds(path: str) -> float:
+    """Container duration via ffprobe; 0.0 on any failure (fail-open)."""
+    try:
+        proc = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+             "-of", "csv=p=0", path],
+            capture_output=True, timeout=30)
+        return float(proc.stdout.decode().strip() or 0)
+    except Exception:
+        return 0.0
+
+
+def _reject_short_source(duration: float):
+    raise HTTPException(status_code=400, detail=(
+        f"This video is only {int(duration)}s long — clip generation needs at "
+        f"least {MIN_SOURCE_SECONDS}s of material to cut from. It already is "
+        f"short-form content."))
+
+
 # Layouts the caller can let the renderer choose from, mapped to the env var
 # each one is gated on. The renderer only ever picks between layouts that are
 # switched on here.
@@ -1555,10 +1590,18 @@ async def process_endpoint(
     # Pre-flight quality gate: probe the offered resolution BEFORE starting, so
     # the user can abort (refresh cookies / update yt-dlp) instead of burning
     # 20 min on a 360p-only source. Fail-open: any probe error starts normally.
-    if url and not force_low and QUALITY_GATE_MIN_HEIGHT > 0:
+    # The probe also runs under force_low_quality so the short-source check
+    # can't be bypassed through the quality-gate confirm.
+    if url and (QUALITY_GATE_MIN_HEIGHT > 0 or MIN_SOURCE_SECONDS > 0):
         probe = await _probe_youtube_quality(url)
+        # Hard reject, no confirm-and-retry: a too-short source fails the same
+        # way on every retry, so letting the user force it just burns the job.
+        source_duration = int(probe.get("duration") or 0)
+        if MIN_SOURCE_SECONDS > 0 and 0 < source_duration < MIN_SOURCE_SECONDS:
+            _reject_short_source(source_duration)
         max_height = int(probe.get("max_height") or 0)
-        if 0 < max_height < QUALITY_GATE_MIN_HEIGHT:
+        if not force_low and QUALITY_GATE_MIN_HEIGHT > 0 \
+                and 0 < max_height < QUALITY_GATE_MIN_HEIGHT:
             print(f"⚠️ Quality gate: only {max_height}p available for {url} — asking user first.")
             return JSONResponse({
                 "needs_confirmation": True,
@@ -1656,6 +1699,10 @@ async def process_endpoint(
         # lookup, the clip editor and the preview treat it exactly like a normal
         # upload; the transcript rides along so the pipeline skips Whisper.
         src = thumb_session["video_path"]
+        src_duration = _media_duration_seconds(src)
+        if MIN_SOURCE_SECONDS > 0 and 0 < src_duration < MIN_SOURCE_SECONDS:
+            shutil.rmtree(job_output_dir, ignore_errors=True)
+            _reject_short_source(src_duration)
         input_path = os.path.join(UPLOAD_DIR, f"{job_id}_{os.path.basename(src)}")
         try:
             os.link(src, input_path)
@@ -1688,6 +1735,12 @@ async def process_endpoint(
                     shutil.rmtree(job_output_dir)
                     raise HTTPException(status_code=413, detail=f"File too large. Max size {MAX_FILE_SIZE_MB}MB")
                 buffer.write(content)
+
+        upload_duration = _media_duration_seconds(input_path)
+        if MIN_SOURCE_SECONDS > 0 and 0 < upload_duration < MIN_SOURCE_SECONDS:
+            os.remove(input_path)
+            shutil.rmtree(job_output_dir, ignore_errors=True)
+            _reject_short_source(upload_duration)
 
         cmd.extend(["-i", input_path])
 

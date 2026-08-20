@@ -58,6 +58,10 @@ def _classify_failure(err: str) -> str:
     # not actionable on our side. Named so the alert doesn't read as an outage.
     if "prohibited_content" in e or "blocked this video" in e or "blocked its answer" in e:
         return "blocked content (user video)"
+    # The source held nothing clip-shaped (typically an already-short video) —
+    # content-shaped like the policy block above, not an outage.
+    if "did not return usable clips" in e or "clip detection failed" in e:
+        return "no clips found (user video)"
     if "gemini" in e or "google.genai" in e:
         return "gemini"
     if "ffmpeg" in e or "reframe" in e:
