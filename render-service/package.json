@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/server.ts",
+    "test": "node --import tsx --test src/composition-metadata.test.ts",
     "build": "tsc",
     "start": "node dist/server.js"
   },
