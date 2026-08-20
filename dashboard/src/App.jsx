@@ -646,7 +646,9 @@ function App() {
     setStatus('processing');
     setLogs(["Starting process..."]);
     setResults(null);
-    setProcessingMedia(data);
+    // Studio handovers have no local media object; the preview switches to the
+    // backend-served source once the job id is known.
+    setProcessingMedia(data.type === 'thumbnail_session' ? null : data);
     setQualityGate(null);
     setProjectState(null);
     setNoSource(false);
@@ -678,6 +680,16 @@ function App() {
           force_low_quality: forceLowQuality,
           ...Object.fromEntries(Object.entries(advanced).filter(([, v]) => v != null)),
         });
+      } else if (data.type === 'thumbnail_session') {
+        // Handover from Thumbnail Studio (issue #68): the video and transcript
+        // already live server-side, keyed by the Studio session.
+        headers['Content-Type'] = 'application/json';
+        body = JSON.stringify({
+          thumbnail_session_id: data.payload,
+          acknowledged: !!data.acknowledged,
+          output_format: data.outputFormat || 'auto',
+          ...Object.fromEntries(Object.entries(advanced).filter(([, v]) => v != null)),
+        });
       } else {
         const formData = new FormData();
         formData.append('file', data.payload);
@@ -703,6 +715,9 @@ function App() {
       }
 
       setJobId(resData.job_id);
+      if (data.type === 'thumbnail_session') {
+        setProcessingMedia({ type: 'server', payload: `/api/source/${resData.job_id}` });
+      }
 
     } catch (e) {
       if (e instanceof QuotaError) {
@@ -1308,7 +1323,18 @@ function App() {
           )}
 
           {activeTab === 'thumbnails' && (
-            <ThumbnailStudio geminiApiKey={apiKey} uploadPostKey={uploadPostKey} uploadUserId={uploadUserId} managed={isManaged} />
+            <ThumbnailStudio
+              geminiApiKey={apiKey}
+              uploadPostKey={uploadPostKey}
+              uploadUserId={uploadUserId}
+              managed={isManaged}
+              onCreateClips={(sessionId) => {
+                setActiveTab('dashboard');
+                // The Studio source is the user's own upload, published to their
+                // own channel; the handover carries that same attestation.
+                handleProcess({ type: 'thumbnail_session', payload: sessionId, acknowledged: true });
+              }}
+            />
           )}
 
           {/* View: Gallery */}

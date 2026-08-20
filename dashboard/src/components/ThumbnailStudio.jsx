@@ -70,7 +70,7 @@ function DragDropZone({ label, accept, onFile, file, onClear, icon }) {
   );
 }
 
-export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUserId, managed = false }) {
+export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUserId, managed = false, onCreateClips = null }) {
   // Managed (hosted plan): Gemini runs server-side via the bearer token, no BYOK key.
   // Only send X-Gemini-Key for self-host BYOK. apiFetch attaches the bearer token.
   const keyHeader = geminiApiKey ? { 'X-Gemini-Key': geminiApiKey } : {};
@@ -1087,6 +1087,16 @@ export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUse
                       <span className="badge-ok">PUBLISHED</span>
                       <p className="text-sm lowercase font-medium text-ink">Published successfully!</p>
                       <p className="text-xs text-muted">Your video is being uploaded to YouTube asynchronously.</p>
+                      {onCreateClips && sessionId && (
+                        <button
+                          onClick={() => onCreateClips(sessionId)}
+                          className="btn-primary px-4 py-2 text-xs mt-1"
+                          title="Send this video and its transcript to the clip generator"
+                        >
+                          <Video size={14} />
+                          create clips from this video
+                        </button>
+                      )}
                     </div>
                   ) : (
                     <div className="space-y-2">

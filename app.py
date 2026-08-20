@@ -1482,7 +1482,8 @@ async def process_endpoint(
     clip_min_seconds: Optional[str] = Form(None),
     clip_max_seconds: Optional[str] = Form(None),
     auto_hook: Optional[str] = Form(None),
-    auto_hook_style: Optional[str] = Form(None)
+    auto_hook_style: Optional[str] = Form(None),
+    thumbnail_session_id: Optional[str] = Form(None)
 ):
     api_key = await resolve_gemini(request)
     if not api_key:
@@ -1507,6 +1508,7 @@ async def process_endpoint(
         clip_max_seconds = body.get("clip_max_seconds")
         auto_hook = body.get("auto_hook")
         auto_hook_style = body.get("auto_hook_style")
+        thumbnail_session_id = body.get("thumbnail_session_id")
 
     # Normalize output format (auto = keep pipeline default).
     if output_format not in ("vertical", "horizontal", "square"):
@@ -1518,7 +1520,20 @@ async def process_endpoint(
     elif not isinstance(layouts, list):
         layouts = []
 
-    if not url and not file:
+    # Module handover (issue #68): reuse the Thumbnail Studio source video and
+    # its transcript so publishing to YouTube can flow straight into clip
+    # generation without re-uploading or re-transcribing.
+    thumb_session = None
+    if thumbnail_session_id and not url and not file:
+        thumb_session = thumbnail_sessions.get(thumbnail_session_id)
+        if not thumb_session:
+            raise HTTPException(status_code=404, detail="Thumbnail session not found or expired")
+        await _assert_job_owner(request, thumb_session)
+        src = thumb_session.get("video_path")
+        if not src or not os.path.exists(src):
+            raise HTTPException(status_code=404, detail="Source video for this session is no longer on disk")
+
+    if not url and not file and not thumb_session:
         raise HTTPException(status_code=400, detail="Must provide URL or File")
 
     # Completion callback: reject unsafe targets NOW (clear 400) — delivery
@@ -1565,7 +1580,7 @@ async def process_endpoint(
         "ip": client_ip,
         "user_agent": user_agent,
         "timestamp": time.time(),
-        "source": "url" if url else "file",
+        "source": "thumbnail_session" if thumb_session else ("url" if url else "file"),
     }
 
     job_id = str(uuid.uuid4())
@@ -1636,6 +1651,24 @@ async def process_endpoint(
         # re-render path cuts new segments from it, and it ages out with the
         # rest of the job (retention window + OUTPUT_MAX_GB cap) either way.
         cmd.extend(["-u", url, "--keep-original"])
+    elif thumb_session:
+        # Hardlink (or copy) the session's video under the job's name so source
+        # lookup, the clip editor and the preview treat it exactly like a normal
+        # upload; the transcript rides along so the pipeline skips Whisper.
+        src = thumb_session["video_path"]
+        input_path = os.path.join(UPLOAD_DIR, f"{job_id}_{os.path.basename(src)}")
+        try:
+            os.link(src, input_path)
+        except OSError:
+            shutil.copyfile(src, input_path)
+        cmd.extend(["-i", input_path])
+        # An empty transcript (e.g. a silent or music-only source) is not worth
+        # forwarding: main.py would reject it and retranscribe anyway.
+        if thumb_session.get("transcript_ready") and (thumb_session.get("transcript") or {}).get("segments"):
+            transcript_path = os.path.join(job_output_dir, "source_transcript.json")
+            with open(transcript_path, "w") as f:
+                json.dump(thumb_session["transcript"], f)
+            cmd.extend(["--transcript", transcript_path])
     else:
         # Save uploaded file with size limit check.
         # basename() strips any path components from the client-supplied

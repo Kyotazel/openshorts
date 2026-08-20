@@ -1515,6 +1515,8 @@ if __name__ == '__main__':
     parser.add_argument('--skip-analysis', action='store_true', help="Skip AI analysis and convert the whole video.")
     parser.add_argument('--format', type=str, default="auto", choices=["auto", "vertical", "horizontal", "square"],
                         help="Output aspect: vertical/auto (9:16), horizontal (keep 16:9), square (1:1).")
+    parser.add_argument('--transcript', type=str,
+                        help="Path to a precomputed transcript JSON (transcribe_media shape); skips transcription.")
 
     args = parser.parse_args()
     output_format = args.format
@@ -1594,10 +1596,25 @@ if __name__ == '__main__':
         # to Gemini vision (picks clips from the imagery instead of the speech).
         from transcribe_backends import NoAudioError
         transcript = None
-        try:
-            transcript = transcribe_video(input_video)
-        except NoAudioError as e:
-            print(f"🔇 {e} — switching to visual analysis.")
+        # Module handover (issue #68): another module already transcribed this
+        # exact source with the same backend, so reuse its output. Any problem
+        # with the file falls back to transcribing normally rather than failing.
+        if args.transcript:
+            try:
+                with open(args.transcript, 'r') as f:
+                    transcript = json.load(f)
+                if not transcript.get('segments'):
+                    raise ValueError("transcript has no segments")
+                print(f"⏩ Reusing precomputed transcript "
+                      f"({len(transcript['segments'])} segments) — skipping transcription.")
+            except Exception as e:
+                print(f"⚠️ Could not use precomputed transcript ({e}) — transcribing normally.")
+                transcript = None
+        if transcript is None:
+            try:
+                transcript = transcribe_video(input_video)
+            except NoAudioError as e:
+                print(f"🔇 {e} — switching to visual analysis.")
 
         # 4. Gemini Analysis (transcript-driven, or vision for silent videos)
         if transcript is not None:
