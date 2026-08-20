@@ -114,7 +114,8 @@ class TestGetEdl:
         assert data["has_captions"] is False
         assert data["source"]["available"] is True
         assert data["source"]["url"] == f"/api/source/{JOB_ID}"
-        # All three transcript words sit within the ±context window.
+        # The editor gets the whole source transcript, not a window around
+        # the clip: a cut can only be extended into words it was sent.
         assert [w["w"] for w in data["words"]] == ["hello", "world", "again"]
         assert data["limits"]["max_segments"] == recut.MAX_SEGMENTS
         # Self-host meters nothing.
