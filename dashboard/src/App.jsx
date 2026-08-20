@@ -75,6 +75,12 @@ const TikTokIcon = ({ size = 16, className = "" }) => (
 // meaningless to the user, so the selector shows connected networks instead.
 const isAutoProfileId = (username) => /^os_[0-9a-f]/i.test(username || "");
 
+const formatRetention = (seconds) => {
+  if (seconds >= 86400) return `${Math.round(seconds / 86400)} day${seconds >= 172800 ? 's' : ''}`;
+  if (seconds >= 3600) return `${Math.round(seconds / 3600)} hour${seconds >= 7200 ? 's' : ''}`;
+  return `${Math.max(1, Math.round(seconds / 60))} min`;
+};
+
 const ProfileNetworkIcons = ({ profile, size = 12 }) => (
   <span className="flex items-center gap-1.5">
     <span className={profile?.connected?.includes('tiktok') ? 'text-ink' : 'text-muted opacity-40'}>
@@ -163,7 +169,9 @@ const UserProfileSelector = ({ profiles, selectedUserId, onSelect }) => {
 };
 
 const SESSION_KEY = 'openshorts_session';
-const SESSION_MAX_AGE = 3600000; // 1 hour (matches server job retention)
+// Matches the self-host JOB_RETENTION_SECONDS default. A restore whose job was
+// already purged server-side fails gracefully and clears the saved session.
+const SESSION_MAX_AGE = 86400000; // 24 hours
 
 // Mock polling function
 const pollJob = async (jobId) => {
@@ -174,7 +182,7 @@ const pollJob = async (jobId) => {
 
 function App() {
   // Cloud auth/billing session (inert when billing is disabled).
-  const { billingEnabled, isManaged, isSignedIn, me, plan, refreshMe } = useAuth();
+  const { billingEnabled, isManaged, isSignedIn, me, plan, refreshMe, jobRetentionSeconds } = useAuth();
   const [showLogin, setShowLogin] = useState(false);
   const [showTopUp, setShowTopUp] = useState(false);
   const [showPlanChoice, setShowPlanChoice] = useState(false);
@@ -1450,6 +1458,14 @@ function App() {
                         <span className="text-muted">They carry a watermark and delete in 7 days.</span>{' '}
                         <span className="text-brass font-medium">Keep them forever →</span>
                       </button>
+                    )}
+                    {/* Self-host only: cloud archives clips to the video library,
+                        here they really are gone once the retention sweep runs. */}
+                    {!billingEnabled && jobRetentionSeconds > 0 && (
+                      <div className="px-3 py-2.5 rounded-input bg-paper3 border border-paper3 text-sm">
+                        <span className="text-ink">Clips are kept for {formatRetention(jobRetentionSeconds)}, then deleted.</span>{' '}
+                        <span className="text-muted">Download what you want to keep, or raise JOB_RETENTION_SECONDS in your env.</span>
+                      </div>
                     )}
                     <StarBanner message="Happy with your clips?" />
                   </div>

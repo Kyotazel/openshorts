@@ -47,7 +47,6 @@ MAX_FILE_SIZE_MB = 2048  # 2GB limit
 # where covers, sounds and hashtags actually get chosen. The UI must say so —
 # a user who expects a published post and finds a draft will read it as a bug.
 TIKTOK_POST_MODE = os.environ.get("TIKTOK_POST_MODE", "MEDIA_UPLOAD").strip()
-JOB_RETENTION_SECONDS = int(os.environ.get("JOB_RETENTION_SECONDS", "3600"))  # job/file retention (issue #46)
 # Ceiling for the working directory once it lives on a persistent volume: the
 # age-based sweep alone can't stop a burst of long videos from filling the disk.
 # 0 disables the cap.
@@ -65,6 +64,14 @@ DISABLE_YOUTUBE_URL = os.environ.get("DISABLE_YOUTUBE_URL", "false").lower() in 
 # when BILLING_ENABLED is set. With the flag off, the app behaves exactly as the
 # self-hosted BYOK app does today (no extra dependencies required).
 BILLING_ENABLED = os.environ.get("BILLING_ENABLED", "").lower() in ("1", "true", "yes")
+
+# Job/file retention (issue #46). Self-host defaults to 24h: the 1h sweep kept
+# deleting finished projects under users who never touched their env, and the
+# OUTPUT_MAX_GB / UPLOADS_MAX_GB caps below already bound the disk. Cloud keeps
+# the tight default because clips are archived to R2 as soon as a job finishes.
+JOB_RETENTION_SECONDS = int(
+    os.environ.get("JOB_RETENTION_SECONDS", "3600" if BILLING_ENABLED else "86400")
+)
 # Force full pipeline logs to the client even under billing (local debugging).
 DEBUG_LOGS = os.environ.get("DEBUG_LOGS", "").lower() in ("1", "true", "yes")
 
@@ -1391,6 +1398,7 @@ async def get_config():
         "youtubeUrlEnabled": not DISABLE_YOUTUBE_URL,
         "billingEnabled": BILLING_ENABLED,
         "googleAuthEnabled": bool(BILLING_ENABLED and cloud.settings.google_auth_enabled),
+        "jobRetentionSeconds": JOB_RETENTION_SECONDS,
     }
 
 async def _probe_youtube_quality(url: str) -> dict:
