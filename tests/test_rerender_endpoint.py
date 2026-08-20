@@ -121,6 +121,28 @@ class TestGetEdl:
         # Self-host meters nothing.
         assert data["rerender_minutes"] == 0
 
+    def test_ships_words_far_outside_the_clip(self, job):
+        """The EDL carries the WHOLE source transcript. The old ±45s window
+        would drop these words (clip ends at 40s, they start at 200s), and a
+        cut can only be extended into material whose words were sent."""
+        meta = json.loads(job["meta_path"].read_text())
+        meta["transcript"]["segments"].append({
+            "start": 200.0, "end": 260.0, "text": "distant tail",
+            "words": [
+                {"word": "distant", "start": 200.0, "end": 200.4},
+                {"word": "tail", "start": 259.0, "end": 259.5},
+            ],
+        })
+        job["meta_path"].write_text(json.dumps(meta))
+
+        data = _request("GET", f"/api/clip/{JOB_ID}/0/edl").json()
+        assert [w["w"] for w in data["words"]] == [
+            "hello", "world", "again", "distant", "tail"]
+        # Word order is the binary-search invariant the editor's follow-along
+        # highlight depends on.
+        starts = [w["s"] for w in data["words"]]
+        assert starts == sorted(starts)
+
     def test_reports_missing_source(self, job):
         os.remove(job["dir"] / "src.mp4")
         data = _request("GET", f"/api/clip/{JOB_ID}/0/edl").json()
