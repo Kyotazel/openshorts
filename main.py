@@ -565,13 +565,14 @@ def detect_scenes(video_path):
     return scene_detection.detect_scenes(video_path)
 
 def get_video_resolution(video_path):
-    cap = cv2.VideoCapture(video_path)
-    if not cap.isOpened():
-        raise IOError(f"Could not open video file {video_path}")
-    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    cap.release()
-    return width, height
+    probe = cv2.VideoCapture(video_path)
+    try:
+        if not probe.isOpened():
+            raise IOError(f"cannot open video: {video_path}")
+        return (int(probe.get(cv2.CAP_PROP_FRAME_WIDTH)),
+                int(probe.get(cv2.CAP_PROP_FRAME_HEIGHT)))
+    finally:
+        probe.release()
 
 
 # Byte budget for the sanitized video title used as the stem of every derived
@@ -1053,8 +1054,6 @@ def process_video_to_vertical(input_video, final_output_video, aspect_ratio=ASPE
     engine only — the v1 loop below has no layout concept beyond its own
     classifier).
     """
-    script_start_time = time.time()
-
     # v2 engine: analyze downscaled, render natively in ffmpeg. Any failure
     # falls back to the v1 frame loop below so a v2 edge case can't kill jobs.
     if os.environ.get("REFRAME_ENGINE", "v2").strip().lower() != "v1":
@@ -1078,28 +1077,27 @@ def process_video_to_vertical(input_video, final_output_video, aspect_ratio=ASPE
             print(f"   ⚠️ Reframe v2 failed ({type(e).__name__}: {e}) — "
                   f"falling back to v1 frame loop")
 
-    # Define temporary file paths based on the output name
-    base_name = os.path.splitext(final_output_video)[0]
-    temp_video_output = f"{base_name}_temp_video.mp4"
-    temp_audio_output = f"{base_name}_temp_audio.aac"
-
-    # Clean up previous temp files if they exist
-    if os.path.exists(temp_video_output): os.remove(temp_video_output)
-    if os.path.exists(temp_audio_output): os.remove(temp_audio_output)
-    if os.path.exists(final_output_video): os.remove(final_output_video)
+    # The v1 loop stages its work next to the final file: a silent video track
+    # first, then the source audio, muxed together at the end.
+    stem = os.path.splitext(final_output_video)[0]
+    silent_video_path = stem + ".v1video.mp4"
+    audio_track_path = stem + ".v1audio.aac"
+    for stale in (silent_video_path, audio_track_path, final_output_video):
+        if os.path.exists(stale):
+            os.remove(stale)
 
     print(f"🎬 Processing clip: {input_video}")
     print("   Step 1: Detecting scenes...")
     scenes, fps = detect_scenes(input_video)
     
     if not scenes:
+        # Scene detection found nothing: treat the whole video as one scene.
         print("   ❌ No scenes were detected. Using full video as one scene.")
-        # If scene detection fails or finds nothing, treat whole video as one scene
-        cap = cv2.VideoCapture(input_video)
-        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        cap.release()
+        probe = cv2.VideoCapture(input_video)
+        span = int(probe.get(cv2.CAP_PROP_FRAME_COUNT))
+        probe.release()
         from scenedetect import FrameTimecode
-        scenes = [(FrameTimecode(0, fps), FrameTimecode(total_frames, fps))]
+        scenes = [(FrameTimecode(0, fps), FrameTimecode(span, fps))]
 
     print(f"   ✅ Found {len(scenes)} scenes.")
 
@@ -1123,17 +1121,18 @@ def process_video_to_vertical(input_video, final_output_video, aspect_ratio=ASPE
     
     print("\n   ✂️ Step 4: Processing video frames...")
     
-    command = [
-        'ffmpeg', '-y', '-f', 'rawvideo', '-vcodec', 'rawvideo',
-        '-s', f'{OUTPUT_WIDTH}x{OUTPUT_HEIGHT}', '-pix_fmt', 'bgr24',
-        '-r', str(fps), '-i', '-',
-        *video_encode_args(QUALITY_FAST), '-an', temp_video_output
-    ]
+    # Raw BGR frames stream down a pipe into ffmpeg, which encodes the silent
+    # video track; the audio is muxed back in afterwards.
+    encoder = subprocess.Popen(
+        ['ffmpeg', '-y',
+         '-f', 'rawvideo', '-pix_fmt', 'bgr24',
+         '-video_size', f'{OUTPUT_WIDTH}x{OUTPUT_HEIGHT}',
+         '-framerate', str(fps), '-i', 'pipe:0',
+         *video_encode_args(QUALITY_FAST), '-an', silent_video_path],
+        stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
 
-    ffmpeg_process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-
-    cap = cv2.VideoCapture(input_video)
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    reader = cv2.VideoCapture(input_video)
+    frame_total = int(reader.get(cv2.CAP_PROP_FRAME_COUNT))
     
     frame_number = 0
     current_scene_index = 0
@@ -1150,9 +1149,9 @@ def process_video_to_vertical(input_video, final_output_video, aspect_ratio=ASPE
     stage_seconds = {'detect': 0.0, 'write': 0.0}
     loop_started = time.time()
 
-    with tqdm(total=total_frames, desc="   Processing", file=sys.stdout) as pbar:
-        while cap.isOpened():
-            ret, frame = cap.read()
+    with tqdm(total=frame_total, desc="   Processing", file=sys.stdout) as pbar:
+        while reader.isOpened():
+            ret, frame = reader.read()
             if not ret:
                 break
 
@@ -1204,7 +1203,7 @@ def process_video_to_vertical(input_video, final_output_video, aspect_ratio=ASPE
                     output_frame = cv2.resize(frame, (OUTPUT_WIDTH, OUTPUT_HEIGHT), interpolation=cv2.INTER_LINEAR)
 
             t_wr = time.time()
-            ffmpeg_process.stdin.write(output_frame.tobytes())
+            encoder.stdin.write(output_frame.tobytes())
             stage_seconds['write'] += time.time() - t_wr
             frame_number += 1
             pbar.update(1)
@@ -1216,52 +1215,41 @@ def process_video_to_vertical(input_video, final_output_video, aspect_ratio=ASPE
           f"encode-wait {stage_seconds['write']:.1f}s, "
           f"decode+render {other:.1f}s ({frame_number} frames)")
 
-    ffmpeg_process.stdin.close()
-    stderr_output = ffmpeg_process.stderr.read().decode()
-    ffmpeg_process.wait()
-    cap.release()
+    encoder.stdin.close()
+    encode_log = encoder.stderr.read().decode()
+    encoder.wait()
+    reader.release()
 
-    if ffmpeg_process.returncode != 0:
+    if encoder.returncode != 0:
         print("\n   ❌ FFmpeg frame processing failed.")
-        print("   Stderr:", stderr_output)
+        print("   Stderr:", encode_log)
         return False
 
     print("\n   🔊 Step 5: Extracting audio...")
-    audio_extract_command = [
-        'ffmpeg', '-y', '-i', input_video, '-vn', '-acodec', 'copy', temp_audio_output
-    ]
     try:
-        subprocess.run(audio_extract_command, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        subprocess.run(
+            ['ffmpeg', '-y', '-i', input_video, '-vn', '-c:a', 'copy', audio_track_path],
+            check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
     except subprocess.CalledProcessError:
         print("\n   ❌ Audio extraction failed (maybe no audio?). Proceeding without audio.")
-        pass
 
     print("\n   ✨ Step 6: Merging...")
-    if os.path.exists(temp_audio_output):
-        merge_command = [
-            'ffmpeg', '-y', '-i', temp_video_output, '-i', temp_audio_output,
-            '-c:v', 'copy', '-c:a', 'copy', *METADATA_SCRUB,
-            '-movflags', '+faststart', final_output_video
-        ]
-    else:
-         merge_command = [
-            'ffmpeg', '-y', '-i', temp_video_output,
-            '-c:v', 'copy', *METADATA_SCRUB,
-            '-movflags', '+faststart', final_output_video
-        ]
-        
+    mux = ['ffmpeg', '-y', '-i', silent_video_path]
+    if os.path.exists(audio_track_path):
+        mux += ['-i', audio_track_path]
+    mux += ['-c', 'copy', *METADATA_SCRUB, '-movflags', '+faststart', final_output_video]
     try:
-        subprocess.run(merge_command, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        subprocess.run(mux, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
         print(f"   ✅ Clip saved to {final_output_video}")
     except subprocess.CalledProcessError as e:
         print("\n   ❌ Final merge failed.")
         print("   Stderr:", e.stderr.decode())
         return False
 
-    # Clean up temp files
-    if os.path.exists(temp_video_output): os.remove(temp_video_output)
-    if os.path.exists(temp_audio_output): os.remove(temp_audio_output)
-    
+    for leftover in (silent_video_path, audio_track_path):
+        if os.path.exists(leftover):
+            os.remove(leftover)
+
     return True
 
 def transcribe_video(video_path):
