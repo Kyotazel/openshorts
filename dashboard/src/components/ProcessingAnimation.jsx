@@ -31,8 +31,9 @@ const ProcessingAnimation = ({ media, isComplete, syncedTime, isSyncedPlaying, s
   useEffect(() => {
     if (!isYouTube && videoRef.current) {
       if (isSyncedPlaying) {
-        // Sync Mode: Seek to time and Play
-        videoRef.current.currentTime = syncedTime;
+        // Sync Mode: Seek to time and Play. A non-finite time (a clip with no
+        // start yet) would throw and take the whole tree down — skip the seek.
+        if (Number.isFinite(syncedTime)) videoRef.current.currentTime = syncedTime;
         videoRef.current.play().catch(e => console.log("Auto-play prevented", e));
         videoRef.current.loop = false;
         videoRef.current.muted = true; // Keep muted to avoid double audio with clip
