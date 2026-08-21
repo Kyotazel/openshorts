@@ -20,6 +20,7 @@ import asyncio
 import json
 import math
 import os
+import random
 import subprocess
 from datetime import datetime, timezone, timedelta
 from decimal import Decimal
@@ -63,11 +64,34 @@ def probe_file_minutes(path: str) -> float:
     return seconds / 60.0
 
 
+def plan_probe_proxies(direct_first, statics, paid):
+    """Ordered proxies for a metadata probe — pure, unit-tested.
+
+    Same cheapest-first order as the download plan (``main.plan_download_attempts``):
+    the server's own IP when the operator allows it, then the flat-rate static ISP
+    pool, then the per-GB paid proxy. ``None`` means "no proxy" (direct).
+
+    This probe used to read ``PROXY_URL`` only, which it kept doing after the
+    static pool landed (dfa3124, 19-aug-2026) because that commit never touched
+    this file. Every managed YouTube submission then paid the per-GB proxy for
+    ~0.2-1 MB of metadata while the download itself went out free over the
+    statics — and invisibly, since ``PROXY_BYTES`` (main.py) only counts the
+    bytes of the winning *download* attempt.
+    """
+    order = []
+    if direct_first or not (statics or paid):
+        order.append(None)
+    order.extend(statics)
+    if paid:
+        order.append(paid)
+    return order
+
+
 def probe_url_minutes(url: str) -> float:
     """Return the video duration in minutes from yt-dlp metadata (no download).
 
-    Uses the same proxy + extractor settings as the actual download (main.py) so
-    the probe behaves consistently with it. Metadata only — negligible bandwidth.
+    Uses the same proxy order + extractor settings as the actual download
+    (main.py) so the probe behaves consistently with it and bills the same way.
     Raises ValueError if the duration is unknown (e.g. live streams).
     """
     import yt_dlp
@@ -77,7 +101,6 @@ def probe_url_minutes(url: str) -> float:
 
     bgutil_http = os.environ.get("BGUTIL_BASE_URL", "").strip()
     bgutil_script = os.environ.get("BGUTIL_SCRIPT_PATH", "").strip()
-    proxy = os.environ.get("PROXY_URL", "").strip()
     conservative = {"youtube": {"player_client": ["tv_embed", "android", "mweb", "web"],
                                 "player_skip": ["webpage", "configs"]}}
     # Try the bgutil/HD extractor first (http or baked-in script), then the
@@ -90,21 +113,46 @@ def probe_url_minutes(url: str) -> float:
         hd = []
     strategies = hd + [conservative]
 
+    # Rotated per probe to spread load across the pool, like the download does.
+    statics = [p.strip() for p in
+               os.environ.get("STATIC_PROXY_URLS", "").split(",") if p.strip()]
+    if statics:
+        k = random.randrange(len(statics))
+        statics = statics[k:] + statics[:k]
+    proxies = plan_probe_proxies(
+        os.environ.get("DIRECT_FIRST", "").strip() == "1",
+        statics,
+        os.environ.get("PROXY_URL", "").strip(),
+    )
+
+    # A dead route in the chain is routine (the proxy watcher is what reports
+    # it, on Telegram); yt-dlp printing a full ERROR block per failed proxy per
+    # strategy would just flood the API log. The reason still reaches the caller
+    # through ``last_err`` below.
+    class _QuietLogger:
+        def debug(self, msg): pass
+        def info(self, msg): pass
+        def warning(self, msg): pass
+        def error(self, msg): pass
+
+    # Proxies outer, strategies inner: the paid proxy is only reached once every
+    # free route has failed on both extractors.
     last_err = None
-    for extractor_args in strategies:
-        opts = {"skip_download": True, "quiet": True, "no_warnings": True,
-                "extractor_args": extractor_args}
-        if proxy:
-            opts["proxy"] = proxy
-        try:
-            with yt_dlp.YoutubeDL(opts) as ydl:
-                info = ydl.extract_info(url, download=False)
-            duration = info.get("duration")
-            if duration:
-                return float(duration) / 60.0
-            last_err = ValueError("no duration in metadata")
-        except Exception as e:
-            last_err = e
+    for proxy in proxies:
+        for extractor_args in strategies:
+            opts = {"skip_download": True, "quiet": True, "no_warnings": True,
+                    "logger": _QuietLogger(), "extractor_args": extractor_args}
+            if proxy:
+                opts["proxy"] = proxy
+            try:
+                with yt_dlp.YoutubeDL(opts) as ydl:
+                    info = ydl.extract_info(url, download=False)
+                duration = info.get("duration")
+                if duration:
+                    return float(duration) / 60.0
+                last_err = ValueError("no duration in metadata")
+            except Exception as e:
+                last_err = e
     raise ValueError(f"Could not determine video duration ({last_err})")
 
 

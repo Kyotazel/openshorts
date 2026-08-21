@@ -244,6 +244,20 @@ async def reserve_process_minutes(request, url, input_path, job_id):
         raise HTTPException(status_code=429,
                             detail="You already have the maximum number of jobs running. Please wait.")
 
+    # Out of minutes -> 402 before probing. The probe is a real yt-dlp metadata
+    # fetch through the download proxies, and every job costs at least one
+    # minute, so a user at zero can be turned away without spending bandwidth on
+    # a duration we are about to reject anyway (4 of 12 submissions in the
+    # 21-aug-2026 sample were quota 402s that had already paid for their probe).
+    balance = await _metering.get_balance(user.id)
+    if balance["remaining"] < 1:
+        _maybe_send_quota_email(user)
+        raise HTTPException(status_code=402, detail={
+            "error": "quota_exceeded",
+            "minutes_required": 1,
+            "minutes_remaining": balance["remaining"],
+        })
+
     # Probe rate limit: probing costs a (cheap) proxied metadata call. The
     # 20-minute monthly quota is the real bound on free usage; there is no daily
     # job cap.
