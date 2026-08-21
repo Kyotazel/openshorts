@@ -12,7 +12,7 @@ import zipfile
 import math
 import itertools
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
 from typing import Any, Dict, Optional, List
 from contextlib import asynccontextmanager
@@ -3906,6 +3906,22 @@ async def social_post_analytics(
     )
 
 
+_PERIOD_DAYS = {"last_day": 1, "last_week": 7, "last_month": 30,
+                "last_3months": 90, "last_year": 365}
+
+
+def _post_row_views(row: dict) -> float:
+    metrics = row.get("post_metrics") or row.get("metrics") or row
+    for key in ("views", "impressions", "plays"):
+        value = metrics.get(key)
+        if value is not None:
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                return 0.0
+    return 0.0
+
+
 @app.get("/api/social/analytics/impressions")
 async def social_total_impressions(
     request: Request,
@@ -3916,20 +3932,53 @@ async def social_total_impressions(
     breakdown: Optional[bool] = None,
     user: Optional[str] = None,
 ):
-    """Total impressions for the profile over a window, optionally broken down."""
+    """Total impressions for the profile over a window.
+
+    Computed by aggregating the profile-scoped post cache instead of proxying
+    Upload-Post's /total-impressions: that endpoint echoes the requested
+    profile but returns account-wide numbers (observed 2026-08-21 — a profile
+    with zero posts got 85K Instagram impressions), which for managed users
+    would leak other tenants' aggregates. The cache endpoint IS scoped by
+    ?user=, so summing it is both correct and cheap.
+    """
     api_key, profile = await _social_analytics_auth(request, user)
-    params = {}
-    for key, value in (("period", period), ("start_date", start_date),
-                       ("end_date", end_date), ("platform", platform)):
-        if value is not None:
-            params[key] = value
-    if breakdown:
-        params["breakdown"] = "true"
-    return await _upload_post_get(
-        api_key,
-        f"https://api.upload-post.com/api/uploadposts/total-impressions/{profile}",
-        params,
-    )
+
+    days = _PERIOD_DAYS.get(period or "", 30)
+    since = start_date or (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d")
+    params = {"user": profile, "since": since, "limit": 200}
+    if end_date:
+        params["until"] = end_date
+    if platform:
+        params["platform"] = platform
+
+    total = 0.0
+    per_platform: dict = {}
+    for _page in range(5):  # 1000 posts is far beyond any real profile window
+        data = await _upload_post_get(
+            api_key,
+            "https://api.upload-post.com/api/uploadposts/post-analytics/cached",
+            params,
+        )
+        rows = data.get("posts") or data.get("data") or data.get("items") or []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            views = _post_row_views(row)
+            total += views
+            name = row.get("platform")
+            if name:
+                per_platform[name] = per_platform.get(name, 0) + views
+        cursor = data.get("next_cursor")
+        if not cursor or not data.get("has_more"):
+            break
+        params["cursor"] = cursor
+
+    result = {
+        "profile_username": profile,
+        "total_impressions": round(total),
+        "per_platform": {k: round(v) for k, v in per_platform.items()},
+    }
+    return result
 
 
 # --- Thumbnail Studio Endpoints ---
