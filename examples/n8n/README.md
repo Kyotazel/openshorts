@@ -49,7 +49,9 @@ changing the base URL (needs a GPU box, your own Gemini key, and your own
 3. **Drip-publish** — each approved clip takes the next free daily slot and is
    scheduled through `POST /api/social/post` to every account you connected in
    OpenShorts (TikTok, Instagram, YouTube). Approve five clips today, fill five
-   days of content.
+   days of content. The slot comes from the queue the server actually holds
+   (`GET /api/social/scheduled`), so two clips approved seconds apart cannot
+   book the same one.
 4. **Sunday digest** — the machine reads the analytics of what it published
    (`GET /api/social/analytics/*`) and reports total impressions, per-platform
    split, and your best post of the week.
@@ -64,9 +66,10 @@ Machine-specific setup, all inside sticky notes on the canvas:
 - Connect your social accounts in your OpenShorts account page (Cloud) — the
   posting step uses them directly; no extra social credentials in n8n.
 
-Note: the machine remembers processed videos and scheduling slots in n8n
-workflow static data, which only persists for **production** executions — test
-runs in the editor won't advance the state.
+Note: the machine remembers which videos it already processed in n8n workflow
+static data, which only persists for **production** executions — test runs in
+the editor won't advance it. Scheduling deliberately does *not* use that
+mechanism (see act 3).
 
 ## Webhook payload
 
@@ -91,6 +94,8 @@ service). On the self-hosted edition the same workflow runs against
 ## Publishing and analytics API
 
 Direct posting: `POST /api/social/post` (accepts `scheduled_date`, ISO-8601).
+Publishing queue: `GET /api/social/scheduled`, and
+`DELETE /api/social/scheduled/{job_id}` to cancel one before it goes out.
 Analytics of what you published: `GET /api/social/analytics` (profile totals),
 `GET /api/social/analytics/posts` (per-post metrics),
 `GET /api/social/analytics/impressions` (windowed totals, `period=last_week`).

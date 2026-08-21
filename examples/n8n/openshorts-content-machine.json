@@ -332,7 +332,7 @@
     },
     {
       "parameters": {
-        "content": "## ACT 3 \u2014 Tap \u2705, it gets scheduled\n\nThe Telegram trigger listens for the approval buttons. Every approved clip is scheduled through OpenShorts (which posts to every social account you connected there \u2014 TikTok, Instagram, YouTube) at a rate of **one post per day**: approve five clips today and you just filled five days of content.\n\n**Setup**: none beyond the Telegram credential \u2014 the chat id comes from the button tap itself. Change the platforms list in *Schedule social post* if you want fewer networks.",
+        "content": "## ACT 3 \u2014 Tap \u2705, it gets scheduled\n\nThe Telegram trigger listens for the approval buttons. Every approved clip is scheduled through OpenShorts (which posts to every social account you connected there) at a rate of **one post per day**: approve five clips today and you just filled five days of content.\n\nThe next free slot is computed from the **queue the server actually holds** (`GET /api/social/scheduled`), not from a counter inside n8n \u2014 two clips approved seconds apart would otherwise both book the same slot and go out together.\n\n**Setup**: none beyond the Telegram credential \u2014 the chat id comes from the button tap itself. Change the platforms list in *Schedule social post* if you want fewer networks.",
         "height": 380,
         "width": 400,
         "color": 6
@@ -415,14 +415,14 @@
     },
     {
       "parameters": {
-        "jsCode": "// One post per day: each approval takes the next free daily slot, so a\n// batch of approvals turns into a steady drip instead of a burst.\nconst staticData = $getWorkflowStaticData('global');\nconst now = Date.now();\nconst last = staticData.lastScheduledAt || 0;\nconst slot = Math.max(now + 10 * 60 * 1000, last + 24 * 60 * 60 * 1000);\nstaticData.lastScheduledAt = slot;\nconst item = $input.first().json;\nreturn [{ json: { ...item, scheduled_date: new Date(slot).toISOString() } }];"
+        "jsCode": "// One post per day, derived from the queue the server actually holds.\n// Workflow static data was the obvious place to remember the last slot, but\n// two approvals tapped seconds apart run as two executions that both read the\n// old value and book the SAME slot. The scheduled list is shared state, so\n// counting it cannot race with itself in that way.\nconst queue = $input.first().json.scheduled_posts || [];\nconst item = $('Parse button').first().json;\nconst DAY = 24 * 60 * 60 * 1000;\nconst taken = queue\n  .map((p) => Date.parse(p.scheduled_date))\n  .filter((t) => !Number.isNaN(t))\n  .sort((a, b) => a - b);\nlet slot = Date.now() + 10 * 60 * 1000;  // never schedule in the past\nfor (const t of taken) {\n  if (Math.abs(t - slot) < DAY) slot = t + DAY;\n}\nreturn [{ json: { ...item, scheduled_date: new Date(slot).toISOString() } }];"
       },
       "id": "reserve-slot",
-      "name": "Reserve daily slot",
+      "name": "Pick next free slot",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        580,
+        800,
         840
       ]
     },
@@ -455,7 +455,7 @@
     {
       "parameters": {
         "chatId": "={{ $('Parse button').first().json.chat_id }}",
-        "text": "=\ud83d\udcc5 Scheduled! Going out to your connected accounts on {{ $('Reserve daily slot').first().json.scheduled_date.slice(0, 10) }}.",
+        "text": "=\ud83d\udcc5 Scheduled! Going out to your connected accounts on {{ $('Pick next free slot').first().json.scheduled_date.slice(0, 10) }}.",
         "additionalFields": {}
       },
       "id": "tg-scheduled",
@@ -647,6 +647,27 @@
           "name": "Telegram bot"
         }
       }
+    },
+    {
+      "parameters": {
+        "url": "https://api.openshorts.app/api/social/scheduled",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "id": "read-queue",
+      "name": "Read publishing queue",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        580,
+        840
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "name": "OpenShorts API key"
+        }
+      }
     }
   ],
   "connections": {
@@ -790,7 +811,7 @@
       "main": [
         [
           {
-            "node": "Reserve daily slot",
+            "node": "Read publishing queue",
             "type": "main",
             "index": 0
           }
@@ -798,17 +819,6 @@
         [
           {
             "node": "Confirm: skipped",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Reserve daily slot": {
-      "main": [
-        [
-          {
-            "node": "Schedule social post",
             "type": "main",
             "index": 0
           }
@@ -871,6 +881,28 @@
         [
           {
             "node": "Send weekly digest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read publishing queue": {
+      "main": [
+        [
+          {
+            "node": "Pick next free slot",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pick next free slot": {
+      "main": [
+        [
+          {
+            "node": "Schedule social post",
             "type": "main",
             "index": 0
           }

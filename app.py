@@ -3981,6 +3981,50 @@ async def social_total_impressions(
     return result
 
 
+async def _scheduled_posts_for(api_key: str, profile: str) -> list:
+    """The caller's pending scheduled posts.
+
+    Upload-Post's GET /uploadposts/schedule takes no profile filter and returns
+    everything the *account* has pending — with the managed key that is every
+    OpenShorts user's queue, so the filter below is what keeps one tenant from
+    seeing (or cancelling) another's. Same class of bug as the impressions
+    endpoint; do not "simplify" it away.
+    """
+    data = await _upload_post_get(
+        api_key, "https://api.upload-post.com/api/uploadposts/schedule", {})
+    rows = data.get("scheduled_posts") or data.get("data") or []
+    return [r for r in rows
+            if isinstance(r, dict) and r.get("profile_username") == profile]
+
+
+@app.get("/api/social/scheduled")
+async def social_scheduled(request: Request, user: Optional[str] = None):
+    """Pending scheduled posts for the caller's profile, soonest first."""
+    api_key, profile = await _social_analytics_auth(request, user)
+    rows = await _scheduled_posts_for(api_key, profile)
+    rows.sort(key=lambda r: r.get("scheduled_date") or "")
+    return {"profile_username": profile, "scheduled_posts": rows}
+
+
+@app.delete("/api/social/scheduled/{job_id}")
+async def social_cancel_scheduled(job_id: str, request: Request, user: Optional[str] = None):
+    """Cancel one pending scheduled post, if it belongs to the caller."""
+    api_key, profile = await _social_analytics_auth(request, user)
+    rows = await _scheduled_posts_for(api_key, profile)
+    if not any(r.get("job_id") == job_id for r in rows):
+        # 404 rather than 403: never confirm that someone else's job exists.
+        raise HTTPException(status_code=404, detail="Scheduled post not found")
+    headers = {"Authorization": f"Apikey {api_key}"}
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        resp = await client.delete(
+            f"https://api.upload-post.com/api/uploadposts/schedule/{job_id}",
+            headers=headers)
+    if resp.status_code not in (200, 202, 204):
+        raise HTTPException(status_code=resp.status_code,
+                            detail=f"Vendor API Error: {resp.text}")
+    return {"success": True, "job_id": job_id}
+
+
 # --- Thumbnail Studio Endpoints ---
 
 @app.post("/api/thumbnail/upload")
