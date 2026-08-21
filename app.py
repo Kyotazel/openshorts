@@ -3814,6 +3814,124 @@ async def get_social_user(request: Request):
         except Exception as e:
              raise HTTPException(status_code=500, detail=str(e))
 
+
+# --- Social analytics (thin proxies over Upload-Post) ---
+# Read-only mirrors of the posting flow above: managed users are locked to their
+# own profile (the body/query profile is ignored), BYOK callers bring their own
+# key and pick the profile with ?user=.
+
+# Separate bucket from _probe_times: analytics polling must not eat into the
+# metering-probe allowance, and vice versa. Protects the managed Upload-Post
+# key's vendor rate limits from a runaway polling loop.
+_analytics_times: dict = {}  # user_id -> [monotonic timestamps]
+ANALYTICS_PER_HOUR = 60
+
+
+def _check_analytics_rate(user_id):
+    now = time.monotonic()
+    times = _analytics_times.setdefault(str(user_id), [])
+    times[:] = [t for t in times if now - t < 3600]
+    if len(times) >= ANALYTICS_PER_HOUR:
+        raise HTTPException(status_code=429,
+                            detail="Too many analytics requests this hour. Please slow down.")
+    times.append(now)
+
+
+async def _social_analytics_auth(request: Request, byok_profile: Optional[str]):
+    api_key, forced_profile = await resolve_upload_post(request, None)
+    if not api_key:
+        if BILLING_ENABLED:
+            # Signed-in free user (or no auth at all): social posting is
+            # paid-only in cloud, so there are no posts to measure either.
+            raise HTTPException(status_code=402, detail={
+                "error": "no_plan",
+                "message": "Social analytics needs an active plan.",
+            })
+        raise HTTPException(status_code=400, detail="Missing X-Upload-Post-Key header")
+    if forced_profile:
+        user = await _user_from_request(request)
+        if user:
+            _check_analytics_rate(user.id)
+    profile = forced_profile or byok_profile
+    if not profile:
+        raise HTTPException(status_code=400, detail="Missing Upload-Post user profile (pass ?user= with BYOK)")
+    return api_key, profile
+
+
+async def _upload_post_get(api_key: str, url: str, params: dict):
+    headers = {"Authorization": f"Apikey {api_key}"}
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        resp = await client.get(url, headers=headers, params=params)
+    if resp.status_code != 200:
+        raise HTTPException(status_code=resp.status_code, detail=f"Vendor API Error: {resp.text}")
+    return resp.json()
+
+
+@app.get("/api/social/analytics")
+async def social_profile_analytics(
+    request: Request,
+    platforms: str = "tiktok,instagram,youtube",
+    user: Optional[str] = None,
+):
+    """Aggregated profile analytics: followers, views, engagement per platform."""
+    api_key, profile = await _social_analytics_auth(request, user)
+    return await _upload_post_get(
+        api_key,
+        f"https://api.upload-post.com/api/analytics/{profile}",
+        {"platforms": platforms},
+    )
+
+
+@app.get("/api/social/analytics/posts")
+async def social_post_analytics(
+    request: Request,
+    platform: Optional[str] = None,
+    limit: Optional[int] = None,
+    cursor: Optional[str] = None,
+    since: Optional[str] = None,
+    until: Optional[str] = None,
+    user: Optional[str] = None,
+):
+    """Per-post metrics for the profile's published posts (Upload-Post cache)."""
+    api_key, profile = await _social_analytics_auth(request, user)
+    params = {"user": profile}
+    for key, value in (("platform", platform), ("limit", limit),
+                       ("cursor", cursor), ("since", since), ("until", until)):
+        if value is not None:
+            params[key] = value
+    return await _upload_post_get(
+        api_key,
+        "https://api.upload-post.com/api/uploadposts/post-analytics/cached",
+        params,
+    )
+
+
+@app.get("/api/social/analytics/impressions")
+async def social_total_impressions(
+    request: Request,
+    period: Optional[str] = None,     # last_day | last_week | last_month | last_3months | last_year
+    start_date: Optional[str] = None,  # YYYY-MM-DD
+    end_date: Optional[str] = None,
+    platform: Optional[str] = None,
+    breakdown: Optional[bool] = None,
+    user: Optional[str] = None,
+):
+    """Total impressions for the profile over a window, optionally broken down."""
+    api_key, profile = await _social_analytics_auth(request, user)
+    params = {}
+    for key, value in (("period", period), ("start_date", start_date),
+                       ("end_date", end_date), ("platform", platform)):
+        if value is not None:
+            params[key] = value
+    if breakdown:
+        params["breakdown"] = "true"
+    return await _upload_post_get(
+        api_key,
+        f"https://api.upload-post.com/api/uploadposts/total-impressions/{profile}",
+        params,
+    )
+
+
 # --- Thumbnail Studio Endpoints ---
 
 @app.post("/api/thumbnail/upload")
