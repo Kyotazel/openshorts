@@ -1236,9 +1236,9 @@ export default function ClipEditor({ jobId, clipIndex, clipTitle, onClose, onRer
                                             #{selected + 1} ends here
                                         </button>
                                     </div>
-                                ) : (
+                                ) : words.length > 0 ? (
                                     <span className="readout shrink-0">CLICK A WORD, THEN SET A BOUNDARY</span>
-                                )}
+                                ) : null}
                             </div>
                             {words.length === 0 ? (
                                 <p className="text-xs text-muted lowercase">this job kept no transcript</p>
