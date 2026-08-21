@@ -1,11 +1,20 @@
 # OpenShorts + n8n
 
-Importable workflow: a video URL goes in through a form, OpenShorts clips it,
-and a signed webhook brings back the finished clips. No polling.
+Two importable workflows, from a one-shot clipper to a full channel autopilot.
+Both work out of the box with [OpenShorts Cloud](https://www.openshorts.app/)
+(free tier: 20 min of video, paid plans from $12/mo). OpenShorts is also open
+source: self-hosters can point either workflow at their own instance by
+changing the base URL (needs a GPU box, your own Gemini key, and your own
+[Upload-Post](https://www.upload-post.com/) account for the posting steps).
 
-## Import
+| Workflow | What it does | Credentials |
+|---|---|---|
+| `openshorts-clip-and-notify.json` | A video URL goes in through a form, clips come back on a signed webhook. No polling. | OpenShorts API key |
+| `openshorts-content-machine.json` | Your YouTube channel on autopilot: daily clipping, approval buttons in Telegram, drip-scheduled posting, weekly analytics digest. | OpenShorts API key + Telegram bot |
 
-1. In n8n: **Workflows → Import from file** → `openshorts-clip-and-notify.json`.
+## Shared setup
+
+1. In n8n: **Workflows → Import from file** → pick the workflow.
 2. Create a **Header Auth** credential named `OpenShorts API key`:
    - Name: `Authorization`
    - Value: `Bearer osk_...` (create the key in your account page at
@@ -23,6 +32,41 @@ and a signed webhook brings back the finished clips. No polling.
      .update(JSON.stringify($json.body))
      .digest('hex');
    ```
+
+## The Content Machine
+
+`openshorts-content-machine.json` runs your channel in four acts:
+
+1. **Watch** — once a day it reads your channel's RSS feed
+   (`https://www.youtube.com/feeds/videos.xml?channel_id=UC...`) and clips
+   **one** video: the newest upload if there is one, otherwise the next
+   unprocessed video from your back catalog. One video a day keeps quota burn
+   predictable; a 402 (out of minutes) pauses the machine and tells you on
+   Telegram instead of failing silently.
+2. **Approve from your phone** — every finished clip lands in Telegram with
+   ✅ Publish / ❌ Skip buttons. Clips over Telegram's ~20 MB URL limit fall
+   back to a link message with the same buttons.
+3. **Drip-publish** — each approved clip takes the next free daily slot and is
+   scheduled through `POST /api/social/post` to every account you connected in
+   OpenShorts (TikTok, Instagram, YouTube). Approve five clips today, fill five
+   days of content.
+4. **Sunday digest** — the machine reads the analytics of what it published
+   (`GET /api/social/analytics/*`) and reports total impressions, per-platform
+   split, and your best post of the week.
+
+Machine-specific setup, all inside sticky notes on the canvas:
+
+- Put your channel id in the **Channel RSS feed** node.
+- Create a Telegram bot with [@BotFather](https://t.me/BotFather), add the
+  `Telegram bot` credential, and replace `YOUR_TELEGRAM_CHAT_ID` in the
+  notification nodes (message your bot, then check
+  `api.telegram.org/bot<token>/getUpdates` for your chat id).
+- Connect your social accounts in your OpenShorts account page (Cloud) — the
+  posting step uses them directly; no extra social credentials in n8n.
+
+Note: the machine remembers processed videos and scheduling slots in n8n
+workflow static data, which only persists for **production** executions — test
+runs in the editor won't advance the state.
 
 ## Webhook payload
 
@@ -44,10 +88,12 @@ field, so the flow never hangs waiting.
 service). On the self-hosted edition the same workflow runs against
 `http://localhost:8000` with no API key.
 
-## Publishing the clips
+## Publishing and analytics API
 
-Each item after **One item per clip** is a finished 9:16 clip. Chain whatever
-comes next: Slack/email notification, a Sheets log, or direct posting via
-`POST /api/social/post`. Full API reference:
-[api.openshorts.app/docs](https://api.openshorts.app/docs). Agent-native
-version of the same pipeline: [openshorts.app/mcp](https://www.openshorts.app/mcp).
+Direct posting: `POST /api/social/post` (accepts `scheduled_date`, ISO-8601).
+Analytics of what you published: `GET /api/social/analytics` (profile totals),
+`GET /api/social/analytics/posts` (per-post metrics),
+`GET /api/social/analytics/impressions` (windowed totals, `period=last_week`).
+Full API reference: [api.openshorts.app/docs](https://api.openshorts.app/docs).
+Agent-native version of the same pipeline (MCP):
+[openshorts.app/mcp](https://www.openshorts.app/mcp).
