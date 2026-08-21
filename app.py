@@ -139,6 +139,31 @@ async def resolve_upload_post(request: Request, body_key: Optional[str] = None):
     return key, None
 
 
+def resolve_post_profile(forced_profile: Optional[str], client_profile: Optional[str]) -> str:
+    """The Upload-Post profile to act as, for posting/scheduling/analytics.
+
+    Fails closed on purpose. Every call site used to read
+    ``forced_profile or client_profile``, which quietly honours whatever
+    profile the *client* asked for if the server ever failed to resolve its
+    own — one refactor of ``resolve_upload_post`` away from letting a cloud
+    user schedule into someone else's connected accounts. In cloud mode the
+    client value is never consulted: either the server knows the caller's
+    profile or the request is refused.
+    """
+    if BILLING_ENABLED:
+        if not forced_profile:
+            raise HTTPException(
+                status_code=503,
+                detail="Could not resolve your social profile. Please try again.")
+        return forced_profile
+    # Self-host: no user model, the caller owns the Upload-Post account whose
+    # key resolved above, so it picks its own profile.
+    profile = forced_profile or client_profile
+    if not profile:
+        raise HTTPException(status_code=400, detail="Missing Upload-Post user profile")
+    return profile
+
+
 def gemini_missing_error():
     """The right 4xx when no Gemini key could be resolved.
 
@@ -3664,9 +3689,7 @@ async def post_to_socials(req: SocialPostRequest, request: Request):
     upload_key, forced_profile = await resolve_upload_post(request, req.api_key)
     if not upload_key:
         raise HTTPException(status_code=400, detail="Missing Upload-Post API key")
-    post_user = forced_profile or req.user_id
-    if not post_user:
-        raise HTTPException(status_code=400, detail="Missing Upload-Post user profile")
+    post_user = resolve_post_profile(forced_profile, req.user_id)
 
     job = jobs[req.job_id]
     await _assert_job_owner(request, job)
@@ -3852,10 +3875,7 @@ async def _social_analytics_auth(request: Request, byok_profile: Optional[str]):
         user = await _user_from_request(request)
         if user:
             _check_analytics_rate(user.id)
-    profile = forced_profile or byok_profile
-    if not profile:
-        raise HTTPException(status_code=400, detail="Missing Upload-Post user profile (pass ?user= with BYOK)")
-    return api_key, profile
+    return api_key, resolve_post_profile(forced_profile, byok_profile)
 
 
 async def _upload_post_get(api_key: str, url: str, params: dict):
@@ -4757,9 +4777,7 @@ async def saasshorts_post_to_socials(req: SaaSPostRequest, request: Request):
     upload_key, forced_profile = await resolve_upload_post(request, req.api_key)
     if not upload_key:
         raise HTTPException(status_code=400, detail="Missing Upload-Post API key")
-    post_user = forced_profile or req.user_id
-    if not post_user:
-        raise HTTPException(status_code=400, detail="Missing Upload-Post user profile")
+    post_user = resolve_post_profile(forced_profile, req.user_id)
 
     job = saas_jobs[req.job_id]
     await _assert_job_owner(request, job)
