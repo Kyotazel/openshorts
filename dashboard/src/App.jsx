@@ -96,7 +96,7 @@ const ProfileNetworkIcons = ({ profile, size = 12 }) => (
   </span>
 );
 
-const UserProfileSelector = ({ profiles, selectedUserId, onSelect }) => {
+const UserProfileSelector = ({ profiles, selectedUserId, onSelect, onConnect }) => {
   const [isOpen, setIsOpen] = useState(false);
 
   if (!profiles || profiles.length === 0) return null;
@@ -163,6 +163,17 @@ const UserProfileSelector = ({ profiles, selectedUserId, onSelect }) => {
               </button>
             ))}
           </div>
+          {/* For managed users this dropdown otherwise does nothing (one profile,
+              nothing to switch) — its real job is being the door to connecting
+              the greyed-out networks it displays. */}
+          {onConnect && (
+            <button
+              onClick={() => { setIsOpen(false); onConnect(); }}
+              className="w-full flex items-center gap-2 px-4 py-3 text-sm text-brass hover:bg-paper3 transition-colors text-left border-t border-rule"
+            >
+              <Share2 size={14} /> Connect / manage accounts
+            </button>
+          )}
         </div>
       )}
     </div>
@@ -881,6 +892,7 @@ function App() {
                 profiles={userProfiles}
                 selectedUserId={uploadUserId}
                 onSelect={setUploadUserId}
+                onConnect={isManaged ? handleConnectSocials : undefined}
               />
             )}
 

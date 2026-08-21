@@ -4,6 +4,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { apiJson } from '../lib/api';
 import { track } from '../lib/analytics';
 import ApiKeysCard from './ApiKeysCard';
+import SocialAnalyticsCard from './SocialAnalyticsCard';
 
 const fmt1 = (n) => Math.round((n || 0) * 10) / 10;
 
@@ -180,6 +181,8 @@ export default function AccountPage() {
           </div>
         </div>
       </div>
+
+      <SocialAnalyticsCard />
 
       {topups.length > 0 && (
         <div className="card p-6">
