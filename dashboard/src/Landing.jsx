@@ -274,7 +274,9 @@ export default function Landing({ onLaunchApp }) {
             <p className="hero-description text-muted max-w-2xl mb-8 leading-relaxed lowercase">
               turn long videos into viral 9:16 shorts, or generate ugc marketing videos with ai actors. online, in the cloud, zero setup.
               also a clipping tool for ai agents: claude, chatgpt and n8n drive it over{' '}
-              <a href="/mcp" className="text-ink2 underline underline-offset-4 decoration-rule hover:text-ink hover:decoration-brass transition-colors">mcp</a>.
+              <a href="/mcp" className="text-ink2 underline underline-offset-4 decoration-rule hover:text-ink hover:decoration-brass transition-colors">mcp</a>,
+              or run your channel on autopilot with the{' '}
+              <a href="/n8n-youtube-shorts-automation" className="text-ink2 underline underline-offset-4 decoration-rule hover:text-ink hover:decoration-brass transition-colors">n8n workflow</a>.
             </p>
 
             {/* The hero CTA is the product itself: paste a link and land in the
@@ -781,6 +783,7 @@ export default function Landing({ onLaunchApp }) {
             <a href="/alternatives/opus-clip" className="hover:text-ink transition-colors">vs opus clip</a>
             <a href="/mcp" className="hover:text-ink transition-colors">mcp server & api</a>
             <a href="/automate-shorts-api" className="hover:text-ink transition-colors">automate shorts</a>
+            <a href="/n8n-youtube-shorts-automation" className="hover:text-ink transition-colors">n8n workflow</a>
           </nav>
           <div className="border-t border-rule pt-6 flex flex-col md:flex-row md:items-center justify-between gap-4">
             <div className="flex items-center gap-3">

@@ -897,12 +897,19 @@ const n8nTemplate = () => ({
   breadcrumb: [{ name: 'n8n template' }],
   published: '2026-08-21',
   updated: '2026-08-21',
-  tldr: [
-    'A single importable n8n workflow runs the loop: it reads your channel RSS once a day, clips one video through the OpenShorts API, delivers each finished 9:16 clip to Telegram with Publish and Skip buttons, and schedules the approved ones one per day to every social account you connected.',
-    'It needs two credentials, an OpenShorts API key and a Telegram bot token. No TikTok or Instagram OAuth app, no public CDN URL for the video file, and no Wait-node polling loop: the clipper calls a webhook exactly once when the job ends, success or failure.',
-    'The workflow JSON is free and MIT-licensed, and so is the clipper behind it. It runs against the hosted API (20 free minutes a month, paid plans from $12/month) or against your own self-hosted instance by changing one base URL.',
-  ],
   body: `
+<figure class="shot">
+<img src="/n8n-content-machine-workflow.png" width="950" height="750" loading="eager"
+     alt="The OpenShorts content machine open in n8n: four labelled stages, from the daily channel RSS trigger through the clipping call, the Telegram approval buttons and the weekly analytics digest.">
+<figcaption>The whole machine is one canvas: watch the channel, clip, approve from Telegram, drip-publish and measure.</figcaption>
+</figure>
+<p>This workflow runs a YouTube channel on its own without handing over the
+publish button. Once a day it reads your channel feed, clips one video into
+vertical shorts, and sends each finished clip to your Telegram with Publish and
+Skip buttons. What you approve is scheduled one post per day to the accounts you
+connected, and every Sunday it reports back what the published clips actually
+did. Two credentials, no polling loop, no TikTok or Instagram OAuth app.</p>
+
 <h2>Download the workflow</h2>
 <p>The JSON lives in the project repository, not behind an email form:</p>
 <ul>
