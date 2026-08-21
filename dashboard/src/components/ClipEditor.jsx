@@ -618,37 +618,61 @@ export default function ClipEditor({ jobId, clipIndex, clipTitle, onClose, onRer
 
     // Walk the assembly while the file plays. Everything covered 1:1 (nothing
     // pending) short-circuits to the old behaviour: no jumps, no bookkeeping.
-    const onClipTimeUpdate = useCallback((e) => {
+    // Reaching a boundary the file cannot cross snaps currentTime BACK onto it:
+    // the frame left on screen is the endpoint itself, not the overshoot.
+    const stepPlayback = useCallback((v) => {
         if (dragRef.current?.kind === 'scrub') return;   // seeks report a frame late
-        const v = e.target;
         if (!dirty) { setPlayhead(v.currentTime); return; }
 
         let i = playSpanRef.current;
         let sp = coverage[i];
         if (!sp) return;
 
-        if (sp.rendered !== null) {
-            const spEnd = sp.rendered + (sp.end - sp.start);
-            if (v.currentTime < spEnd - COVERAGE_EPSILON) {
-                setPlayhead(sp.start + (v.currentTime - sp.rendered));
-                return;
-            }
+        const spEnd = sp.rendered !== null ? sp.rendered + (sp.end - sp.start) : null;
+        if (spEnd !== null && v.currentTime < spEnd - COVERAGE_EPSILON) {
+            setPlayhead(sp.start + (v.currentTime - sp.rendered));
+            return;
         }
 
         // Past the end of this span: move on to the next one.
         i += 1;
-        sp = coverage[i];
-        if (!sp) { v.pause(); setPlayhead(totalOf(segments)); return; }
-        playSpanRef.current = i;
-        setPlayhead(sp.start);
-        if (sp.rendered === null) {
-            // Nothing to show here until it is rendered, so stop at the edge
-            // rather than pretending.
+        const next = coverage[i];
+        if (!next || next.rendered === null) {
+            // Nothing to show past this edge until it is rendered, so stop ON
+            // the edge rather than pretending.
             v.pause();
+            if (spEnd !== null) { try { v.currentTime = spEnd; } catch { /* not seekable yet */ } }
+            setPlayhead(next ? next.start : totalOf(segments));
+            if (next) playSpanRef.current = i;
             return;
         }
-        try { v.currentTime = sp.rendered; } catch { /* not seekable yet */ }
+        playSpanRef.current = i;
+        setPlayhead(next.start);
+        try { v.currentTime = next.rendered; } catch { /* not seekable yet */ }
     }, [coverage, dirty, segments]);
+
+    const onClipTimeUpdate = useCallback((e) => stepPlayback(e.target), [stepPlayback]);
+
+    // timeupdate fires ~4 times a second, which let playback overshoot a
+    // trimmed endpoint by up to a quarter of a second before pausing — the
+    // exact boundary is what an end trim is being judged against (issue #73).
+    // While the file plays, this loop enforces it every frame instead.
+    const playRafRef = useRef(0);
+    const stopPlayLoop = useCallback(() => {
+        if (playRafRef.current) cancelAnimationFrame(playRafRef.current);
+        playRafRef.current = 0;
+    }, []);
+    const startPlayLoop = useCallback(() => {
+        stopPlayLoop();
+        const tick = () => {
+            const v = videoRef.current;
+            if (!v || v.paused || v.ended) { playRafRef.current = 0; return; }
+            stepPlayback(v);
+            playRafRef.current = requestAnimationFrame(tick);
+        };
+        playRafRef.current = requestAnimationFrame(tick);
+    }, [stepPlayback, stopPlayLoop]);
+    useEffect(() => stopPlayLoop, [stopPlayLoop]);
 
     // The native controls scrub the FILE; bring that back onto the clip.
     const onClipSeeked = useCallback((e) => {
@@ -661,10 +685,12 @@ export default function ClipEditor({ jobId, clipIndex, clipTitle, onClose, onRer
 
     // Refuse to roll from a span the file cannot show — same reason as above.
     const onClipPlay = useCallback((e) => {
-        if (!dirty) return;
-        const sp = coverage[playSpanRef.current];
-        if (sp && sp.rendered === null) e.target.pause();
-    }, [coverage, dirty]);
+        if (dirty) {
+            const sp = coverage[playSpanRef.current];
+            if (sp && sp.rendered === null) { e.target.pause(); return; }
+        }
+        startPlayLoop();
+    }, [coverage, dirty, startPlayLoop]);
 
     const onScrubMove = useCallback((e) => {
         const d = dragRef.current;
@@ -688,8 +714,10 @@ export default function ClipEditor({ jobId, clipIndex, clipTitle, onClose, onRer
         e.preventDefault();
         try { e.currentTarget.setPointerCapture?.(e.pointerId); } catch { /* window listeners still fire */ }
 
+        // The track can be longer than the clip (its scale is the rendered
+        // length), so positions clamp to the clip's own end, not the track's.
         const at = (clientX) => Math.max(0, Math.min(
-            clipTrackSeconds, ((clientX - rect.left) / rect.width) * clipTrackSeconds));
+            total, ((clientX - rect.left) / rect.width) * clipTrackSeconds));
         // Direction of travel decides which wall a red span stops you at, so it
         // has to be the last APPLIED position, not the one at pointerdown.
         let last = playhead;
@@ -762,7 +790,11 @@ export default function ClipEditor({ jobId, clipIndex, clipTitle, onClose, onRer
             const typing = tag === 'input' || tag === 'textarea' || tag === 'select';
             if (e.key === 'Escape') {
                 e.preventDefault();
-                if (dirty) setConfirmClose(true); else onClose();
+                // Leaving mid-render abandons nothing: the request keeps
+                // running and onRerendered updates the card when it lands.
+                if (rendering) onClose();
+                else if (dirty) setConfirmClose(true);
+                else onClose();
                 return;
             }
             if (typing) return;
@@ -935,7 +967,12 @@ export default function ClipEditor({ jobId, clipIndex, clipTitle, onClose, onRer
         );
     }
 
-    const clipTrackSeconds = Math.max(total, 0.001);
+    // The track's scale is the RENDERED length (or the current total, whichever
+    // is longer), not the current total: normalising to the total made a
+    // single-segment clip fill 100% of the track no matter how it was trimmed,
+    // so dragging its handle visibly moved nothing (issue #73). Against the
+    // rendered length, shortening the clip shortens the bar.
+    const clipTrackSeconds = Math.max(total, totalOf(renderedSegments || []), 0.001);
     let runningOffset = 0;
     const blocks = segments.map((s, i) => {
         const left = (runningOffset / clipTrackSeconds) * 100;
@@ -1086,7 +1123,7 @@ export default function ClipEditor({ jobId, clipIndex, clipTitle, onClose, onRer
                         </div>
                     ) : (
                         <button
-                            onClick={() => (dirty ? setConfirmClose(true) : onClose())}
+                            onClick={() => (rendering ? onClose() : dirty ? setConfirmClose(true) : onClose())}
                             className="p-2 rounded-input text-muted hover:text-ink hover:bg-paper3 transition-colors"
                             aria-label="close editor"
                         >
@@ -1177,9 +1214,31 @@ export default function ClipEditor({ jobId, clipIndex, clipTitle, onClose, onRer
 
                         {/* transcript of the whole source */}
                         <div className="shrink-0 h-[30%] min-h-[9rem] flex flex-col">
-                            <div className="flex items-baseline justify-between mb-1.5 gap-2 shrink-0">
+                            <div className="flex items-center justify-between mb-1.5 gap-2 shrink-0">
                                 <p className="eyebrow">Transcript · full source</p>
-                                <span className="readout shrink-0">CLICK A WORD TO GO THERE</span>
+                                {/* Boundary actions live HERE, above the words they
+                                    act on, because this is where the eye is when
+                                    picking a cut point from the text (issue #73). */}
+                                {selectedWord ? (
+                                    <div className="flex items-center gap-1.5 shrink-0">
+                                        <button
+                                            onClick={() => setSegment(selected, { start: selectedWord.s }, { snap: false })}
+                                            title={`segment #${selected + 1} starts at "${selectedWord.w}" (${fmt(selectedWord.s)})`}
+                                            className="btn-quiet text-[11px] py-1 px-2"
+                                        >
+                                            #{selected + 1} starts here
+                                        </button>
+                                        <button
+                                            onClick={() => setSegment(selected, { end: selectedWord.e }, { snap: false })}
+                                            title={`segment #${selected + 1} ends after "${selectedWord.w}" (${fmt(selectedWord.e)})`}
+                                            className="btn-quiet text-[11px] py-1 px-2"
+                                        >
+                                            #{selected + 1} ends here
+                                        </button>
+                                    </div>
+                                ) : (
+                                    <span className="readout shrink-0">CLICK A WORD, THEN SET A BOUNDARY</span>
+                                )}
                             </div>
                             {words.length === 0 ? (
                                 <p className="text-xs text-muted lowercase">this job kept no transcript</p>
@@ -1249,6 +1308,7 @@ export default function ClipEditor({ jobId, clipIndex, clipTitle, onClose, onRer
                                 onTimeUpdate={onClipTimeUpdate}
                                 onSeeked={onClipSeeked}
                                 onPlay={onClipPlay}
+                                onPause={stopPlayLoop}
                             />
                         </div>
                     </div>
@@ -1478,8 +1538,11 @@ export default function ClipEditor({ jobId, clipIndex, clipTitle, onClose, onRer
                             </p>
                         )}
                         <div className="flex gap-2">
-                            <button className="btn-ghost" onClick={() => (dirty ? setConfirmClose(true) : onClose())}>
-                                {dirty ? 'cancel' : 'close'}
+                            <button
+                                className="btn-ghost"
+                                onClick={() => (rendering ? onClose() : dirty ? setConfirmClose(true) : onClose())}
+                            >
+                                {rendering ? 'close' : dirty ? 'cancel' : 'close'}
                             </button>
                             <button className="btn-primary flex-1 flex items-center justify-center gap-2" disabled={!canRender || !dirty} onClick={doRender}>
                                 {rendering
@@ -1487,6 +1550,11 @@ export default function ClipEditor({ jobId, clipIndex, clipTitle, onClose, onRer
                                     : (needsSourcePath ? 're-render from source' : 're-render clip')}
                             </button>
                         </div>
+                        {rendering && (
+                            <p className="text-[11px] text-muted mt-2 lowercase">
+                                you can close this editor; the render keeps going and the clip card updates when it finishes
+                            </p>
+                        )}
                     </div>
                 </div>
             </div>
