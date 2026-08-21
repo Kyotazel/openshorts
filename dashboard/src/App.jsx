@@ -24,6 +24,7 @@ import ProfileMenu from './components/ProfileMenu';
 import Modal from './components/ui/Modal';
 import { useAuth } from './contexts/AuthContext';
 import { apiFetch, apiJson, QuotaError } from './lib/api';
+import { track } from './lib/analytics';
 
 // Enhanced "Encryption" using XOR + Base64 with a Salt
 // This is better than plain Base64 but still client-side.
@@ -215,6 +216,13 @@ function App() {
 
   const [uploadUserId, setUploadUserId] = useState(() => localStorage.getItem('uploadUserId') || '');
   const [userProfiles, setUserProfiles] = useState([]); // List of {username, connected: []}
+  // Post-generation social nudge: shown at the results peak until the user
+  // either connects a network or dismisses it. Only 2.7% of cloud users who
+  // reach the social flow ever connect an account — this is the moment (clips
+  // just appeared) with the best odds of moving that number.
+  const [socialNudgeDismissed, setSocialNudgeDismissed] = useState(() => {
+    try { return localStorage.getItem('os_social_nudge_dismissed') === '1'; } catch (_) { return false; }
+  });
   const [showKeyModal, setShowKeyModal] = useState(false);
   const [jobId, setJobId] = useState(null);
   const [status, setStatus] = useState('idle'); // idle, processing, complete, error
@@ -611,6 +619,21 @@ function App() {
   const TOOL_NAMES = { dashboard: 'the Clip Generator', thumbnails: 'the YouTube Studio' };
   const gateThisTab = needsPlan && INCLUDED_TOOL_TABS.includes(activeTab);      // included tool, no plan yet
   const advancedThisTab = billingEnabled && ADVANCED_TOOL_TABS.includes(activeTab); // BYOK-notice tools
+
+  // Social nudge visibility: managed users with clips on screen and no network
+  // connected yet. userProfiles being empty (not yet fetched / none created)
+  // also counts as "not connected" — that is the 97% case.
+  const connectedSocials = ((userProfiles.find((p) => p.username === uploadUserId) || userProfiles[0])?.connected) || [];
+  const showSocialNudge = isManaged && !socialNudgeDismissed && connectedSocials.length === 0;
+
+  // One Seen event per job, only when the banner actually rendered.
+  const socialNudgeSeenRef = useRef(null);
+  useEffect(() => {
+    if (status === 'complete' && (results?.clips?.length > 0) && showSocialNudge && socialNudgeSeenRef.current !== jobId) {
+      socialNudgeSeenRef.current = jobId;
+      track('SocialNudgeSeen', { props: { clips: results.clips.length } });
+    }
+  }, [status, results, showSocialNudge, jobId]);
 
   // Managed users connect their socials via Upload-Post's branded hosted page.
   const handleConnectSocials = async () => {
@@ -1484,6 +1507,34 @@ function App() {
                         <span className="text-muted">They carry a watermark and delete in 7 days.</span>{' '}
                         <span className="text-brass font-medium">Keep them forever →</span>
                       </button>
+                    )}
+                    {/* Distribution nudge at the same peak: clips on screen,
+                        publishing them is one connect away. Hidden once any
+                        network is linked or the user dismisses it. */}
+                    {showSocialNudge && (
+                      <div className="w-full flex items-center gap-3 px-3 py-2.5 rounded-input bg-paper3 border border-rule text-sm">
+                        <div className="flex-1 min-w-0">
+                          <span className="text-ink">Publish these clips straight from here.</span>{' '}
+                          <span className="text-muted">Connect your YouTube, TikTok or Instagram once — after that every clip is one click from posted.</span>
+                        </div>
+                        <button
+                          onClick={() => { track('SocialNudgeConnect'); handleConnectSocials(); }}
+                          className="btn-quiet shrink-0 text-xs py-1.5 px-3 lowercase"
+                        >
+                          connect socials →
+                        </button>
+                        <button
+                          onClick={() => {
+                            track('SocialNudgeDismissed');
+                            setSocialNudgeDismissed(true);
+                            try { localStorage.setItem('os_social_nudge_dismissed', '1'); } catch (_) { /* ignore */ }
+                          }}
+                          aria-label="dismiss"
+                          className="shrink-0 p-1 text-muted hover:text-ink"
+                        >
+                          <X size={14} />
+                        </button>
+                      </div>
                     )}
                     {/* Self-host only: cloud archives clips to the video library,
                         here they really are gone once the retention sweep runs. */}

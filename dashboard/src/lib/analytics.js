@@ -16,6 +16,9 @@
 //   - CheckoutRedirected — Stripe returned a URL and we are sending them there
 //   - CheckoutFailed     — /api/billing/checkout errored, `reason` says why
 //   - Subscribed         — plan activated after checkout
+//   - SocialNudgeSeen    — post-generation "connect socials" banner rendered
+//   - SocialNudgeConnect — its connect button clicked (opens hosted connect page)
+//   - SocialNudgeDismissed — its X clicked (persisted, never shown again)
 // The Started → Redirected → Subscribed chain is what separates "never reached
 // Stripe" from "reached Stripe and abandoned"; before 2-ago-2026 the modals
 // emitted only their own *Checkout event and the difference was invisible.
