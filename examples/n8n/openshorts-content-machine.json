@@ -1,5 +1,5 @@
 {
-  "name": "Clip YouTube channel videos into shorts and publish them after Telegram approval",
+  "name": "Clip every new YouTube upload into viral shorts and publish to social media after Telegram approval",
   "nodes": [
     {
       "parameters": {
