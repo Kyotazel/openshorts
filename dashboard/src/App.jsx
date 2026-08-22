@@ -283,7 +283,10 @@ function App() {
   // --- Project persistence (paid mode) ---
   // Debounced sync of each clip's browser-only edit state (Remotion layers +
   // current server file) to the backend, so a reopened project resumes intact.
-  const clipStateSync = useRef({ jobId: null, pending: {}, timer: null });
+  const clipStateSync = useRef({ jobId: null, pending: {}, files: {}, timer: null });
+  // Read by in-flight async chases to notice that the user moved on to another job.
+  const jobIdRef = useRef(jobId);
+  useEffect(() => { jobIdRef.current = jobId; }, [jobId]);
 
   const flushClipState = () => {
     const s = clipStateSync.current;
@@ -303,11 +306,51 @@ function App() {
     }).catch(() => {});
   };
 
+  // One /api/history read, reduced to this job's clips.
+  const fetchDurableMap = async () => {
+    const d = await apiJson('/api/history');
+    const map = {};
+    for (const v of (d.videos || [])) {
+      if (v.job_id === jobId && v.clip_index != null) map[v.clip_index] = { url: v.view_url, filename: v.filename };
+    }
+    return map;
+  };
+
+  // A server-side edit rewrites the clip's file while the R2 re-archive behind it
+  // is still in flight (_archive_clip_edit_bg is fire-and-forget), so the durable
+  // map goes stale and the card falls back to streaming from the API. Re-read the
+  // map on a backoff until the archived name matches the clip's new file, then it
+  // can play from R2 again. Gives up quietly: staying on /videos is correct, just
+  // slower, and is exactly what happens for self-hosted users all the time.
+  const chaseDurableFile = async (index, expectedFile) => {
+    const forJob = jobId;
+    for (const delay of [2500, 6000, 15000, 30000]) {
+      await new Promise((r) => setTimeout(r, delay));
+      if (jobIdRef.current !== forJob) return;
+      let map;
+      try { map = await fetchDurableMap(); } catch { return; }
+      // A new job started mid-chase: this map describes the old one, so dropping
+      // it here keeps it from overwriting the new job's URLs.
+      if (jobIdRef.current !== forJob) return;
+      setDurableClips(map);
+      if (map[index]?.filename === expectedFile) return;
+    }
+  };
+
   const handleClipStateChange = (index, state) => {
     if (!isManaged || !jobId) return;
     const s = clipStateSync.current;
-    if (s.jobId !== jobId) { s.pending = {}; s.jobId = jobId; }
+    if (s.jobId !== jobId) { s.pending = {}; s.files = {}; s.jobId = jobId; }
     s.pending[index] = state;
+    // Cards report on mount too, so only an actual change of server file means an
+    // edit just landed. The first report per clip is the mount, never a chase.
+    const files = s.files || (s.files = {});
+    const file = state?.serverVideoFile;
+    if (file && files[index] !== file) {
+      const isMount = files[index] === undefined;
+      files[index] = file;
+      if (!isMount) chaseDurableFile(index, file);
+    }
     if (s.timer) clearTimeout(s.timer);
     s.timer = setTimeout(flushClipState, 2000);
   };
@@ -528,23 +571,47 @@ function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [uploadPostKey, isManaged]);
 
-  // For managed users, fetch the durable R2 URLs of the current job's clips so the
-  // preview can fall back to them when the local files have been cleaned up.
+  // For managed users, fetch the durable R2 URLs of the current job's clips. The
+  // preview player prefers them (free egress, edge-served, and not competing with
+  // the renders for the API process), and falls back to /videos when the local
+  // file is newer than the archived one or the signed link fails.
+  // Kept fresh by chaseDurableFile after each edit and by the completion chase
+  // below; until either lands, the card just streams from /videos.
   useEffect(() => {
     if (!isManaged || !jobId || !(results?.clips?.length)) { setDurableClips({}); return; }
     let cancelled = false;
-    apiJson('/api/history')
-      .then((d) => {
-        if (cancelled) return;
-        const map = {};
-        for (const v of (d.videos || [])) {
-          if (v.job_id === jobId && v.clip_index != null) map[v.clip_index] = v.view_url;
-        }
-        setDurableClips(map);
-      })
+    fetchDurableMap()
+      .then((map) => { if (!cancelled) setDurableClips(map); })
       .catch(() => {});
     return () => { cancelled = true; };
-  }, [isManaged, jobId, results]);
+    // Keyed on the clip COUNT, not on results: the status poll hands back a new
+    // results object every couple of seconds while the job runs, and this used to
+    // re-read the history on every one of them.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isManaged, jobId, results?.clips?.length]);
+
+  // A job is marked complete BEFORE _archive_managed_job has finished uploading
+  // (app.py:878), so the read above can land while R2 still has nothing for it and
+  // every card would stream from the API for the rest of the session. Chase until
+  // all clips have a durable copy.
+  useEffect(() => {
+    const count = results?.clips?.length || 0;
+    if (!isManaged || !jobId || status !== 'complete' || !count) return;
+    let cancelled = false;
+    (async () => {
+      for (const delay of [0, 3000, 8000, 20000, 40000]) {
+        if (delay) await new Promise((r) => setTimeout(r, delay));
+        if (cancelled) return;
+        let map;
+        try { map = await fetchDurableMap(); } catch { return; }
+        if (cancelled) return;
+        setDurableClips(map);
+        if (Object.keys(map).length >= count) return;
+      }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isManaged, jobId, status, results?.clips?.length]);
 
   useEffect(() => {
     let interval;
@@ -1573,7 +1640,7 @@ function App() {
                           onReframeClip={(index) => setReframingClip(index)}
                           initialState={projectState?.clips?.find((c) => c.index === i) || null}
                           onStateChange={handleClipStateChange}
-                          durableUrl={durableClips[i]}
+                          durable={durableClips[i]}
                           uploadPostKey={uploadPostKey}
                           uploadUserId={uploadUserId}
                           geminiApiKey={apiKey}

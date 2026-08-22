@@ -285,6 +285,12 @@ async def history(request: Request):
             "title": v.title,
             "created_at": v.created_at.isoformat() if v.created_at else None,
             "size_bytes": v.size_bytes,
+            # The basename of the archived object. The preview player compares it
+            # against the clip's current server file: after an edit the local file
+            # is already the new one while the R2 re-archive is still in flight
+            # (_archive_clip_edit_bg is fire-and-forget), and playing the durable
+            # copy then would show the clip from BEFORE the edit.
+            "filename": (v.r2_key or "").rsplit("/", 1)[-1],
             "view_url": storage.presigned_get(v.r2_key, expires=3600),
             "download_url": storage.presigned_get(v.r2_key, expires=3600, download_name=safe_name),
         })

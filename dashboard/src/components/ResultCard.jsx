@@ -35,7 +35,7 @@ function formatDuration(clip) {
     return `${String(Math.floor(secs / 60)).padStart(2, '0')}:${String(secs % 60).padStart(2, '0')}`;
 }
 
-export default function ResultCard({ clip, index, jobId, durableUrl, uploadPostKey, uploadUserId, geminiApiKey, elevenLabsKey, isManaged, onPlay, onPause, onBulkSubtitle, clipCount = 1, bulkProgress, initialState = null, onStateChange, connectedPlatforms = null, onConnectSocials, onEditClip = null, onReframeClip = null }) {
+export default function ResultCard({ clip, index, jobId, durable, uploadPostKey, uploadUserId, geminiApiKey, elevenLabsKey, isManaged, onPlay, onPause, onBulkSubtitle, clipCount = 1, bulkProgress, initialState = null, onStateChange, connectedPlatforms = null, onConnectSocials, onEditClip = null, onReframeClip = null }) {
     const [showModal, setShowModal] = useState(false);
     const [showDescModal, setShowDescModal] = useState(false);
     const [showSubtitleModal, setShowSubtitleModal] = useState(false);
@@ -53,6 +53,28 @@ export default function ResultCard({ clip, index, jobId, durableUrl, uploadPostK
     };
     const originalVideoUrl = getApiUrl((clip.video_url || '').replace(/[^/]+$/, stripBurns((clip.video_url || '').split('/').pop())));
     const [currentVideoUrl, setCurrentVideoUrl] = useState(getApiUrl(clip.video_url));
+    // Where the <video> element pulls its bytes from. The clips are archived to
+    // R2 anyway, and R2 egress is free and edge-served, while /videos is served
+    // by the same single-worker API process that is running the renders. So play
+    // from R2 when possible.
+    //
+    // ONLY when R2 holds exactly the file the server considers current for this
+    // clip (durable.filename === serverVideoFile). Every server-side edit sends
+    // input_filename: serverVideoFile and rewrites clip.video_url, but the R2
+    // re-archive behind it is fire-and-forget, so for a few seconds the durable
+    // copy is the PRE-edit clip. Preferring it blindly would silently show the
+    // clip without the subtitles/hook the user just burned.
+    //
+    // This is display-only: currentVideoUrl remains the source of truth for the
+    // download button and for every server operation, so no edit can be routed
+    // to the wrong file by this.
+    const [durableSrc, setDurableSrc] = useState(null);
+    const [durableFailed, setDurableFailed] = useState(false);
+    // Switching src reloads the element and restarts playback, so the durable copy
+    // is only ever adopted before the user has touched this player. After an edit
+    // the chase in App.jsx can land while they are watching the result, and losing
+    // their position to save a few seconds of buffering is a bad trade.
+    const [hasPlayed, setHasPlayed] = useState(false);
 
     const downloadClip = async () => {
         try {
@@ -81,14 +103,28 @@ export default function ResultCard({ clip, index, jobId, durableUrl, uploadPostK
     const [videoErrored, setVideoErrored] = useState(false);
     const [resolution, setResolution] = useState(null);
 
+    // Adopt the durable copy only while it matches the current server file, and
+    // pin the first signed URL seen for that file: /api/history mints a fresh
+    // signature on every call, and swapping src mid-playback restarts the video.
+    useEffect(() => {
+        if (durable?.url && durable.filename && durable.filename === serverVideoFile && !hasPlayed) {
+            setDurableSrc((prev) => prev || durable.url);
+        } else {
+            setDurableSrc(null);
+        }
+    }, [durable?.url, durable?.filename, serverVideoFile, hasPlayed]);
+
     // If the local video failed and a durable R2 URL is (now) available, use it.
     // Handles the race where the video errors before the durable URL has loaded.
+    // Deliberately NOT version-gated: reaching here means the local file is gone
+    // (retention sweep after a reload), so an older durable copy still beats a
+    // broken player.
     useEffect(() => {
-        if (videoErrored && durableUrl && currentVideoUrl !== durableUrl) {
-            setCurrentVideoUrl(durableUrl);
+        if (videoErrored && durable?.url && currentVideoUrl !== durable.url) {
+            setCurrentVideoUrl(durable.url);
             setVideoErrored(false);
         }
-    }, [videoErrored, durableUrl, currentVideoUrl]);
+    }, [videoErrored, durable, currentVideoUrl]);
 
     // When an external refresh changes this clip's server file (e.g. bulk
     // subtitles applied from another card), adopt it so the card shows the
@@ -99,6 +135,8 @@ export default function ResultCard({ clip, index, jobId, durableUrl, uploadPostK
         if (serverName && serverName !== serverVideoFile) {
             setServerVideoFile(serverName);
             setCurrentVideoUrl(serverUrl);
+            setDurableFailed(false);
+            setHasPlayed(false);
             if (videoRef.current) videoRef.current.load();
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -651,6 +689,12 @@ export default function ResultCard({ clip, index, jobId, durableUrl, uploadPostK
         }
     };
 
+    // Browser-rendered previews (Remotion) live in a blob: URL that exists only
+    // in this tab, so they always win over the durable copy.
+    const playbackUrl = (durableSrc && !durableFailed && !String(currentVideoUrl || '').startsWith('blob:'))
+        ? durableSrc
+        : currentVideoUrl;
+
     const durationReadout = formatDuration(clip);
 
     return (
@@ -659,7 +703,7 @@ export default function ResultCard({ clip, index, jobId, durableUrl, uploadPostK
             <div className="w-full md:w-[236px] bg-black relative shrink-0 aspect-[9/16] md:aspect-auto group/video">
                 <video
                     ref={videoRef}
-                    src={currentVideoUrl}
+                    src={playbackUrl}
                     controls
                     className="w-full h-full object-contain"
                     playsInline
@@ -667,13 +711,21 @@ export default function ResultCard({ clip, index, jobId, durableUrl, uploadPostK
                         if (e.target.videoWidth) setResolution(`${e.target.videoWidth}×${e.target.videoHeight}`);
                     }}
                     onError={() => {
+                        // The durable copy is unreachable (signature expired after an
+                        // hour on an idle tab, object purged) → serve from the API for
+                        // the rest of this card's life.
+                        if (playbackUrl === durableSrc) {
+                            setDurableFailed(true);
+                            return;
+                        }
                         // Local /videos/ file gone (e.g. cleaned up after a reload) →
                         // fall back to the durable R2 copy for managed users. If the
                         // durable URL hasn't loaded yet, the effect above retries.
-                        if (durableUrl && currentVideoUrl !== durableUrl) setCurrentVideoUrl(durableUrl);
+                        if (durable?.url && currentVideoUrl !== durable.url) setCurrentVideoUrl(durable.url);
                         else setVideoErrored(true);
                     }}
                     onPlay={() => {
+                        setHasPlayed(true);
                         const currentTime = videoRef.current ? videoRef.current.currentTime : 0;
                         onPlay && onPlay(clip.start + currentTime);
                     }}
