@@ -1,12 +1,28 @@
 {
-  "name": "OpenShorts Content Machine: your channel clips itself, you approve from your phone",
+  "name": "Clip YouTube channel videos into shorts and publish them after Telegram approval",
   "nodes": [
+    {
+      "parameters": {
+        "content": "## Clip your YouTube channel and publish after approval\n\n**Who's it for**\nCreators and small teams who publish long videos and want shorts from them without\nhanding the publish button to a machine. It suits anyone who already runs n8n and\ndoes not want to build the clipping and the multi-platform posting themselves.\n\n**What it does**\nOnce a day it reads your channel RSS feed and picks one video: your newest upload,\nor the next unprocessed one from the back catalogue. It sends that video to\nOpenShorts, which returns finished 9:16 clips with subtitles through a webhook, so\nthere is no polling loop. Each clip arrives in Telegram with Publish and Skip\nbuttons. Approved clips are scheduled one per day to the social accounts connected\nin your OpenShorts account, and every Sunday the workflow reports the impressions\nand best post of what it published.\n\n**How to set up**\n1. Create an API key at openshorts.app and add it as a Header Auth credential\n   (Name: Authorization, Value: Bearer osk_...).\n2. Create a Telegram bot with @BotFather and add the Telegram credential.\n3. Fill the three **Settings** nodes with your YouTube channel id and Telegram chat id.\n4. Copy the production URL of the *Clips ready* webhook node into the\n   `webhook_url` field of *Start OpenShorts job*.\n\n**Requirements**\nAn OpenShorts account (free tier covers 20 minutes of video a month, paid plans\nfrom $12/month) or a self-hosted instance, a Telegram bot, and an n8n reachable\nover https so Telegram can register the approval buttons.\n\n**How to customize**\nChange the schedule to clip more or less often, edit the platforms list in\n*Schedule social post*, widen the posting rhythm in *Pick next free slot*, or\nreplace the Telegram approval with your own review step.",
+        "height": 900,
+        "width": 460,
+        "color": 3
+      },
+      "id": "note-overview",
+      "name": "Read me first",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -1060,
+        -120
+      ]
+    },
     {
       "parameters": {
         "content": "## ACT 1 \u2014 Watch the channel (daily)\n\nOnce a day this branch reads your channel's RSS feed and picks **one** video to clip: a new upload if there is one, otherwise the next unprocessed video from your back catalog (newest first). One video per day keeps your quota burn predictable.\n\n**Setup**: put your channel id in the *Channel RSS feed* node (`https://www.youtube.com/feeds/videos.xml?channel_id=UC...`). Find it at youtube.com \u2192 your channel \u2192 About \u2192 Share \u2192 Copy channel ID.\n\nIf OpenShorts answers 402 (out of minutes) the machine pauses and tells you on Telegram instead of failing silently.",
         "height": 420,
         "width": 400,
-        "color": 4
+        "color": 7
       },
       "id": "note-act1",
       "name": "Act 1 note",
@@ -39,7 +55,7 @@
     },
     {
       "parameters": {
-        "url": "https://www.youtube.com/feeds/videos.xml?channel_id=YOUR_CHANNEL_ID",
+        "url": "=https://www.youtube.com/feeds/videos.xml?channel_id={{ $json.youtube_channel_id }}",
         "options": {}
       },
       "id": "channel-rss",
@@ -47,7 +63,7 @@
       "type": "n8n-nodes-base.rssFeedRead",
       "typeVersion": 1.1,
       "position": [
-        140,
+        220,
         0
       ]
     },
@@ -60,7 +76,7 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        360,
+        440,
         0
       ]
     },
@@ -80,7 +96,7 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        580,
+        660,
         0
       ],
       "onError": "continueErrorOutput",
@@ -105,7 +121,7 @@
     },
     {
       "parameters": {
-        "chatId": "YOUR_TELEGRAM_CHAT_ID",
+        "chatId": "={{ $('Settings').first().json.telegram_chat_id }}",
         "text": "=\ud83c\udfac Clipping started: {{ $('Pick next video').first().json.title }}\n\nI'll send the clips here for approval when they're ready.",
         "additionalFields": {}
       },
@@ -125,7 +141,7 @@
     },
     {
       "parameters": {
-        "chatId": "YOUR_TELEGRAM_CHAT_ID",
+        "chatId": "={{ $('Settings').first().json.telegram_chat_id }}",
         "text": "\u26a0\ufe0f Autopilot paused: OpenShorts rejected the job (most likely you're out of minutes this month). The video was NOT marked as processed, so it will be retried tomorrow. Top up or upgrade at https://www.openshorts.app/",
         "additionalFields": {}
       },
@@ -148,7 +164,7 @@
         "content": "## ACT 2 \u2014 Clips arrive on your phone\n\n**No polling, no Wait-node loop.** OpenShorts calls this webhook once per job (success **and** failure, so nothing ever hangs). Each finished 9:16 clip lands in your Telegram with two buttons: \u2705 publish or \u274c skip \u2014 a human approves every post, which is also what keeps you on the right side of YouTube's inauthentic-content policy.\n\n**Setup**: copy the **production** URL of the *Clips ready* webhook node and paste it as `webhook_url` inside *Start OpenShorts job*. Telegram fetches videos by URL up to ~20 MB; bigger clips fall back to a message with the download link and the same buttons.",
         "height": 380,
         "width": 400,
-        "color": 5
+        "color": 7
       },
       "id": "note-act2",
       "name": "Act 2 note",
@@ -203,7 +219,7 @@
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
       "position": [
-        140,
+        200,
         440
       ]
     },
@@ -223,7 +239,7 @@
     {
       "parameters": {
         "operation": "sendVideo",
-        "chatId": "YOUR_TELEGRAM_CHAT_ID",
+        "chatId": "={{ $('Settings (clips)').first().json.telegram_chat_id }}",
         "file": "={{ $json.download_url }}",
         "replyMarkup": "inlineKeyboard",
         "inlineKeyboard": {
@@ -269,7 +285,7 @@
     },
     {
       "parameters": {
-        "chatId": "YOUR_TELEGRAM_CHAT_ID",
+        "chatId": "={{ $('Settings (clips)').first().json.telegram_chat_id }}",
         "text": "=\ud83c\udfac {{ $json.title }}\n\nToo big for Telegram preview \u2014 watch it here:\n{{ $json.download_url }}",
         "replyMarkup": "inlineKeyboard",
         "inlineKeyboard": {
@@ -312,7 +328,7 @@
     },
     {
       "parameters": {
-        "chatId": "YOUR_TELEGRAM_CHAT_ID",
+        "chatId": "={{ $('Settings (clips)').first().json.telegram_chat_id }}",
         "text": "=\u274c OpenShorts job failed: {{ $json.body.error || 'unknown error' }}\n\nNothing was published. The machine keeps running tomorrow.",
         "additionalFields": {}
       },
@@ -335,7 +351,7 @@
         "content": "## ACT 3 \u2014 Tap \u2705, it gets scheduled\n\nThe Telegram trigger listens for the approval buttons. Every approved clip is scheduled through OpenShorts (which posts to every social account you connected there) at a rate of **one post per day**: approve five clips today and you just filled five days of content.\n\nThe next free slot is computed from the **queue the server actually holds** (`GET /api/social/scheduled`), not from a counter inside n8n \u2014 two clips approved seconds apart would otherwise both book the same slot and go out together.\n\n**Setup**: none beyond the Telegram credential \u2014 the chat id comes from the button tap itself. Change the platforms list in *Schedule social post* if you want fewer networks.",
         "height": 380,
         "width": 400,
-        "color": 6
+        "color": 7
       },
       "id": "note-act3",
       "name": "Act 3 note",
@@ -517,7 +533,7 @@
         "content": "## ACT 4 \u2014 The feedback loop: learn what worked\n\nOnce a week the machine reads the analytics of everything it published (via the OpenShorts analytics API, which aggregates TikTok/Instagram/YouTube numbers) and sends you the verdict: total impressions, per-platform split, and your best post.\n\nThe machine that posts is the machine that measures \u2014 so every approval you make next week is informed by what actually landed. Close the loop further by feeding your winners back as examples in your clip prompts.",
         "height": 340,
         "width": 400,
-        "color": 3
+        "color": 7
       },
       "id": "note-act4",
       "name": "Act 4 note",
@@ -576,7 +592,7 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        140,
+        200,
         1360
       ],
       "credentials": {
@@ -630,7 +646,7 @@
     },
     {
       "parameters": {
-        "chatId": "YOUR_TELEGRAM_CHAT_ID",
+        "chatId": "={{ $('Settings (weekly)').first().json.telegram_chat_id }}",
         "text": "={{ $json.digest }}",
         "additionalFields": {}
       },
@@ -668,6 +684,82 @@
           "name": "OpenShorts API key"
         }
       }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "s0",
+              "name": "youtube_channel_id",
+              "value": "YOUR_CHANNEL_ID",
+              "type": "string"
+            },
+            {
+              "id": "s1",
+              "name": "telegram_chat_id",
+              "value": "YOUR_TELEGRAM_CHAT_ID",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "cfg-main",
+      "name": "Settings",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        60,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "s0",
+              "name": "telegram_chat_id",
+              "value": "YOUR_TELEGRAM_CHAT_ID",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {},
+        "includeOtherFields": true
+      },
+      "id": "cfg-clips",
+      "name": "Settings (clips)",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        40,
+        440
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "s0",
+              "name": "telegram_chat_id",
+              "value": "YOUR_TELEGRAM_CHAT_ID",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "cfg-weekly",
+      "name": "Settings (weekly)",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        40,
+        1360
+      ]
     }
   ],
   "connections": {
@@ -675,7 +767,7 @@
       "main": [
         [
           {
-            "node": "Channel RSS feed",
+            "node": "Settings",
             "type": "main",
             "index": 0
           }
@@ -737,7 +829,7 @@
       "main": [
         [
           {
-            "node": "Job completed?",
+            "node": "Settings (clips)",
             "type": "main",
             "index": 0
           }
@@ -847,7 +939,7 @@
       "main": [
         [
           {
-            "node": "Weekly impressions",
+            "node": "Settings (weekly)",
             "type": "main",
             "index": 0
           }
@@ -903,6 +995,39 @@
         [
           {
             "node": "Schedule social post",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Settings": {
+      "main": [
+        [
+          {
+            "node": "Channel RSS feed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Settings (clips)": {
+      "main": [
+        [
+          {
+            "node": "Job completed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Settings (weekly)": {
+      "main": [
+        [
+          {
+            "node": "Weekly impressions",
             "type": "main",
             "index": 0
           }
