@@ -1434,10 +1434,11 @@ function App() {
                   />
                 )}
 
-                {/* The wait is dead time — the best moment to ask for a star. */}
+                {/* The render is dead time: the user is watching a progress bar
+                    with nothing to do, so this is where the one star ask goes. */}
                 {status === 'processing' && (
                   <div className="my-3">
-                    <StarBanner message="Free while it renders?" />
+                    <StarBanner message="Got a minute while this renders?" />
                   </div>
                 )}
 
@@ -1556,7 +1557,6 @@ function App() {
                         <span className="text-muted">Download what you want to keep, or raise JOB_RETENTION_SECONDS in your env.</span>
                       </div>
                     )}
-                    <StarBanner message="Happy with your clips?" />
                   </div>
                 )}
 
