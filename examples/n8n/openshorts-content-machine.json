@@ -1,5 +1,5 @@
 {
-  "name": "Clip every new YouTube upload into viral shorts and publish to social media after Telegram approval",
+  "name": "Clip new YouTube uploads into viral shorts with open-source OpenShorts and publish after Telegram approval",
   "nodes": [
     {
       "parameters": {
