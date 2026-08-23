@@ -1670,7 +1670,11 @@ async def process_endpoint(
     os.makedirs(job_output_dir, exist_ok=True)
 
     # Prepare Command
-    cmd = ["python", "-u", "main.py"] # -u for unbuffered
+    # sys.executable, not "python": bare "python" resolves against PATH, which
+    # outside Docker is whatever interpreter happens to be first — not the venv
+    # running this server. Every job then dies on `import cv2`. The quality
+    # probe above already gets this right.
+    cmd = [sys.executable, "-u", "main.py"] # -u for unbuffered
     env = os.environ.copy()
     env["GEMINI_API_KEY"] = api_key # Override with key from request
 
