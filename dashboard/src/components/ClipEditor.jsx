@@ -1092,11 +1092,16 @@ export default function ClipEditor({ jobId, clipIndex, clipTitle, onClose, onRer
             <div className="px-4 sm:px-6 pt-4 pb-3 border-b border-rule flex items-start justify-between gap-4 shrink-0">
                 <div className="min-w-0">
                     <p className="eyebrow mb-1">EDITOR · CLIP {clipIndex + 1}</p>
-                    <h2 className="font-display lowercase text-2xl text-ink truncate">edit clip</h2>
+                    <h2 className="font-display lowercase text-xl sm:text-2xl text-ink truncate">edit clip</h2>
                     {clipTitle && <p className="text-xs text-muted truncate mt-0.5">{clipTitle}</p>}
+                    {/* Phone: the readouts move under the title — as a third
+                        column they squeezed the title to two characters. */}
+                    <p className="readout sm:hidden mt-1 truncate">
+                        {fmt(total)} · {needsSourcePath ? 'FULL RE-FRAME' : 'FAST RECUT'}
+                    </p>
                 </div>
-                <div className="flex items-center gap-3 shrink-0">
-                    <div className="text-right">
+                <div className="flex items-center gap-2 sm:gap-3 shrink-0">
+                    <div className="text-right hidden sm:block">
                         <p className="readout">DURATION · {fmt(total)}</p>
                         <p className="readout mt-1">
                             {needsSourcePath ? 'PATH · FULL RE-FRAME' : 'PATH · FAST RECUT'}
@@ -1109,15 +1114,16 @@ export default function ClipEditor({ jobId, clipIndex, clipTitle, onClose, onRer
                             title={showSource
                                 ? 'put the source monitor away and edit the clip on its own'
                                 : 'bring back the source monitor, its transcript and in/out marking'}
-                            className="btn-quiet text-xs py-1.5 px-3 flex items-center gap-1.5 lowercase"
+                            aria-label={showSource ? 'hide source' : 'show source'}
+                            className="btn-quiet text-xs py-1.5 px-2.5 sm:px-3 flex items-center gap-1.5 lowercase"
                         >
                             {showSource ? <PanelLeftClose size={14} /> : <PanelLeft size={14} />}
-                            {showSource ? 'hide source' : 'show source'}
+                            <span className="hidden sm:inline">{showSource ? 'hide source' : 'show source'}</span>
                         </button>
                     )}
                     {confirmClose ? (
-                        <div className="flex items-center gap-2">
-                            <span className="text-xs text-warn lowercase">discard changes?</span>
+                        <div className="flex flex-wrap items-center justify-end gap-2">
+                            <span className="text-xs text-warn lowercase hidden sm:inline">discard changes?</span>
                             <button className="btn-danger text-xs py-1.5 px-3" onClick={onClose}>discard</button>
                             <button className="btn-ghost text-xs py-1.5 px-3" onClick={() => setConfirmClose(false)}>keep editing</button>
                         </div>
