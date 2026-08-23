@@ -1084,7 +1084,9 @@ def process_video_to_vertical(input_video, final_output_video, aspect_ratio=ASPE
     silent_video_path = stem + ".v1video.mp4"
     audio_track_path = stem + ".v1audio.aac"
     for stale in (silent_video_path, audio_track_path, final_output_video):
-        if os.path.exists(stale):
+        # isfile, not exists: a caller that hands us a directory should not
+        # take an EACCES here, and must never have it deleted either.
+        if os.path.isfile(stale):
             os.remove(stale)
 
     print(f"🎬 Processing clip: {input_video}")
@@ -1582,7 +1584,13 @@ if __name__ == '__main__':
     # 2. Decision: Analyze clips or process whole?
     if args.skip_analysis:
         print("⏩ Skipping analysis, processing entire video...")
-        output_file = args.output if args.output else os.path.join(output_dir, f"{video_title}_vertical.mp4")
+        # --output is documented as "directory or file". When it names a
+        # directory we still need a filename: passing the directory through
+        # ends up in os.remove() on it further down and dies with EACCES.
+        output_file = args.output
+        if (not output_file or os.path.isdir(output_file)
+                or output_file.endswith(("/", os.sep))):
+            output_file = os.path.join(output_dir, f"{video_title}_vertical.mp4")
         render_clip(input_video, output_file, output_format)
     else:
         # Get duration (needed by both the transcript and the vision path).
