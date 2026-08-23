@@ -1337,6 +1337,17 @@ def enqueue_output(out, job_id):
             decoded_line = _scrub_secrets(line.decode('utf-8').strip())
             if decoded_line:
                 # Internal marker from main.py's downloader, not a log line.
+                # Internal marker: a clip finished its whole chain and this is
+                # the file to serve for it. Consumed here like PROXY_BYTES so it
+                # never reaches the user's log.
+                if decoded_line.startswith("CLIP_READY "):
+                    try:
+                        _, index, filename = decoded_line.split(" ", 2)
+                        if job_id in jobs:
+                            jobs[job_id].setdefault('ready_files', {})[int(index)] = filename
+                    except ValueError:
+                        pass
+                    continue
                 if decoded_line.startswith("PROXY_BYTES="):
                     try:
                         if job_id in jobs:
@@ -1400,13 +1411,20 @@ async def run_job(job_id, job_data):
                         cost_analysis = data.get('cost_analysis')
                         
                         # Check which clips actually exist on disk
+                        # Only clips main.py has announced as finished. It names
+                        # the file itself, so a clip shows up WITH its hook and
+                        # captions instead of as the bare reframe, and it is never
+                        # served while ffmpeg is still writing it. A clip whose
+                        # marker never arrives (it failed) simply stays hidden
+                        # until the job ends and the result is rebuilt from disk.
+                        ready_files = (jobs.get(job_id) or {}).get('ready_files') or {}
                         ready_clips = []
                         for i, clip in enumerate(clips):
-                             clip_filename = f"{base_name}_clip_{i+1}.mp4"
+                             clip_filename = ready_files.get(i)
+                             if not clip_filename:
+                                 continue
                              clip_path = os.path.join(output_dir, clip_filename)
                              if os.path.exists(clip_path) and os.path.getsize(clip_path) > 0:
-                                 # Checking if file is growing? For now assume if it exists and main.py moves it there, it's done.
-                                 # main.py writes to temp_... then moves to final name. So presence means ready!
                                  clip['video_url'] = f"/videos/{job_id}/{clip_filename}"
                                  ready_clips.append(clip)
                         

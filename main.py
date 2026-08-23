@@ -1703,8 +1703,18 @@ if __name__ == '__main__':
                         if hooked:
                             deliver_path, clip['auto_hook'] = hooked
                     if success:
-                        auto_caption_clip(deliver_path, transcript, start, end)
+                        captioned = auto_caption_clip(deliver_path, transcript, start, end)
                         print(f"   ✅ Clip {i+1} ready: {clip_final_path}")
+                        # Hand the API the file to actually serve for this clip.
+                        # Without it the status poller guesses the clean reframe
+                        # name, so a job in flight showed every clip stripped of
+                        # its hook and captions until the WHOLE job finished and
+                        # the result got rebuilt through _canonical_clip_file.
+                        # Printed only after the full chain (reframe, watermark,
+                        # hook, captions) so the file is complete when it is
+                        # announced, never one that ffmpeg is still writing.
+                        print(f"CLIP_READY {i} "
+                              f"{os.path.basename(captioned or deliver_path)}")
                     return success
                 finally:
                     if os.path.exists(clip_temp_path):
