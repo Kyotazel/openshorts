@@ -64,6 +64,22 @@ MIN_SOURCE_SECONDS = int(os.environ.get("MIN_SOURCE_SECONDS", "45"))
 QUALITY_PROBE_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "quality_probe.py")
 DISABLE_YOUTUBE_URL = os.environ.get("DISABLE_YOUTUBE_URL", "false").lower() in ("1", "true", "yes")
 
+# Every log line in this module is emoji-prefixed, and a Windows console is
+# cp1252 by default. _recover_jobs_from_disk() prints one during startup, so
+# without this the server dies before it ever listens:
+#
+#   UnicodeEncodeError: 'charmap' codec can't encode characters in position 0-1
+#   ERROR:    Application startup failed. Exiting.
+#
+# subtitles._configure_stdio solved this for the transcription path; the server
+# needs it too, and needs it before the first print.
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
 # ---- Cloud billing (paid / managed-keys) integration --------------------------
 # All paid-mode code lives in the optional `cloud/` package and is imported ONLY
 # when BILLING_ENABLED is set. With the flag off, the app behaves exactly as the
@@ -1674,9 +1690,18 @@ async def process_endpoint(
     os.makedirs(job_output_dir, exist_ok=True)
 
     # Prepare Command
-    cmd = ["python", "-u", "main.py"] # -u for unbuffered
+    # sys.executable, not "python": bare "python" resolves against PATH, which
+    # outside Docker is whatever interpreter happens to be first — not the venv
+    # running this server. Every job then dies on `import cv2`. The quality
+    # probe above already gets this right.
+    cmd = [sys.executable, "-u", "main.py"] # -u for unbuffered
     env = os.environ.copy()
     env["GEMINI_API_KEY"] = api_key # Override with key from request
+    # The stdio fix above only covers this process. main.py prints an emoji on
+    # its first line and configures nothing, so on a cp1252 console the child
+    # still dies before it renders anything -- the server starts and every job
+    # fails instead. setdefault, so an explicit PYTHONIOENCODING still wins.
+    env.setdefault("PYTHONIOENCODING", "utf-8")
 
     # Optional layouts are per job. The renderer reads these at import time in
     # the subprocess, so they must be set before Popen — same path WATERMARK

@@ -154,3 +154,23 @@ def video_encode_args(tier=QUALITY):
               f"(FFMPEG_ENCODER={mode})")
 
     return list((_NVENC_ARGS if use_nvenc else _X264_ARGS)[tier])
+
+
+def escape_filter_value(value):
+    r"""Escape a path/value for use inside a quoted FFmpeg filter argument.
+
+    Windows absolute paths are why this exists: ``:`` separates filter options,
+    so an interpolated ``C:/x/y.txt`` makes the parser look for an option named
+    ``/x/y.txt`` and the whole filtergraph fails to build.
+
+    NOTE: an apostrophe in the path cannot be made safe here. ffmpeg's
+    filtergraph parser is not a shell -- the shell idiom ``'\''`` was tried on
+    29-jul-2026 and is worse than doing nothing: it drops the apostrophe AND
+    swallows the following option, so ``ass='...Earth'\''s.ass':fontsdir='...'``
+    resolved to a filename of "...Earths.ass:fontsdir=..." and failed to open.
+
+    The only reliable answer is to keep apostrophes OUT of any path that is
+    interpolated into a filter. Callers generate their own filenames, so they
+    control this: use a neutral name, never one derived from a video title.
+    """
+    return value.replace('\\', '/').replace(':', '\\:').replace("'", "\\'")

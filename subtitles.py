@@ -3,7 +3,8 @@ import re
 import subprocess
 import sys
 
-from ffmpeg_utils import video_encode_args, QUALITY, METADATA_SCRUB
+from ffmpeg_utils import (video_encode_args, escape_filter_value, QUALITY,
+                          METADATA_SCRUB)
 
 
 _STDIO_CONFIGURED = False
@@ -100,8 +101,12 @@ def _escape_ffmpeg_filter_value(value):
     interpolated into a filter. Callers generate their own subtitle filenames,
     so they control this: use a neutral name (``subs_<i>_<ts>.ass``), never one
     derived from a video title.
+
+    The implementation now lives in ffmpeg_utils so the reframe engine can use
+    it too: it was building `sendcmd=f='<abs path>'` unescaped, which is the
+    same bug this function was written for.
     """
-    return value.replace('\\', '/').replace(':', '\\:').replace("'", "\\'")
+    return escape_filter_value(value)
 
 
 def _normalize_subtitle_word(value):

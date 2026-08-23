@@ -26,7 +26,8 @@ import camera_inset
 import punch_in
 import screencast_layout
 import split_layout
-from ffmpeg_utils import video_encode_args, QUALITY_FAST, METADATA_SCRUB
+from ffmpeg_utils import (video_encode_args, escape_filter_value, QUALITY_FAST,
+                          METADATA_SCRUB)
 
 ANALYSIS_MAX_WIDTH = 640
 
@@ -522,7 +523,7 @@ def render(input_video, final_output_video, aspect_ratio, content_ranges=None,
                 with open(cmd_path, "w") as f:
                     f.write("\n".join(lines) + "\n")
                 graph = (
-                    f"[0:v]sendcmd=f='{cmd_path}',"
+                    f"[0:v]sendcmd=f='{escape_filter_value(cmd_path)}',"
                     f"crop@c={init},"
                     f"scale={out_w}:{out_h},setsar=1[v]"
                 )
