@@ -76,11 +76,35 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
     // their position to save a few seconds of buffering is a bad trade.
     const [hasPlayed, setHasPlayed] = useState(false);
 
+    // A delivered clip is tens of MB, and on a slow link the old silent
+    // fetch-then-save took minutes with nothing on screen, which reads as a dead
+    // button. Stream it instead and report progress.
+    const [downloadPct, setDownloadPct] = useState(null);
+
     const downloadClip = async () => {
         try {
+            setDownloadPct(0);
             const response = await fetch(currentVideoUrl);
             if (!response.ok) throw new Error('Download failed');
-            const blob = await response.blob();
+            const total = Number(response.headers.get('content-length')) || 0;
+            let blob;
+            // No body reader (old browser) or no length to measure against: fall
+            // back to the plain path rather than lose the download.
+            if (!response.body || !total) {
+                blob = await response.blob();
+            } else {
+                const reader = response.body.getReader();
+                const chunks = [];
+                let received = 0;
+                for (;;) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    chunks.push(value);
+                    received += value.length;
+                    setDownloadPct(Math.min(99, Math.round((received / total) * 100)));
+                }
+                blob = new Blob(chunks, { type: 'video/mp4' });
+            }
             const url = window.URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.style.display = 'none';
@@ -93,6 +117,8 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
         } catch (err) {
             console.error('Download error:', err);
             window.open(currentVideoUrl, '_blank');
+        } finally {
+            setDownloadPct(null);
         }
     };
     // Latest file that exists ON THE SERVER (blob: previews don't count).
@@ -890,7 +916,8 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
                         }}
                         className={`${QUIET_BTN}${onEditClip ? ' col-span-2' : ''}`}
                     >
-                        <Download size={16} className="text-muted group-hover:text-brass transition-colors shrink-0" /> download
+                        <Download size={16} className="text-muted group-hover:text-brass transition-colors shrink-0" />
+                        {downloadPct === null ? 'download' : `downloading ${downloadPct}%`}
                     </button>
                 </div>
             </div>

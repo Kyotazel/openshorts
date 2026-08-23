@@ -250,6 +250,25 @@ class Settings:
         return os.environ.get("R2_SECRET_ACCESS_KEY", "")
 
     @property
+    def r2_public_base(self) -> str:
+        """Base URL of a custom domain bound to the R2 bucket, e.g.
+        https://cdn.openshorts.app — unset means keep signing S3 URLs.
+
+        The S3 endpoint (*.r2.cloudflarestorage.com) is not a browser-facing
+        endpoint: measured 22-ago-2026, a presigned GET from Chrome on a Spanish
+        residential line returns 503 on every attempt while the same URL with the
+        same headers returns 206 at 11 MB/s from a datacenter. A custom domain
+        serves the same objects through the normal Cloudflare edge, which both
+        fixes that and puts the bytes on Cloudflare's network instead of a single
+        long path out of Hetzner (measured to the same client: 90 KB/s).
+
+        Objects under it are public. That matches the capability model already in
+        production for /videos/{job_id}/... (unauthenticated, the UUID is the
+        capability); anything stricter needs a Worker checking a signed token.
+        """
+        return os.environ.get("R2_PUBLIC_BASE", "").strip().rstrip("/")
+
+    @property
     def r2_configured(self) -> bool:
         return bool(self.r2_endpoint and self.r2_bucket and self.r2_access_key_id
                     and self.r2_secret_access_key)

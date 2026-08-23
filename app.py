@@ -1240,6 +1240,10 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    # Without this the browser hides them from fetch(), so the clip download had
+    # no total to measure against and could not show progress. Safelisted or not,
+    # they only become readable to JS once they are named here.
+    expose_headers=["Content-Length", "Content-Range", "Accept-Ranges"],
 )
 
 # Mount static files for serving videos

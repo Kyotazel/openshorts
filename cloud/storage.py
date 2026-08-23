@@ -4,6 +4,8 @@ Layout: users/<user_id>/<job_id>/<filename>. Presigned URLs give private,
 time-limited view/download links. Delete-by-prefix wipes a user's whole library
 when their subscription's grace period ends.
 """
+from urllib.parse import quote
+
 import boto3
 from botocore.config import Config
 
@@ -65,6 +67,18 @@ def list_keys(prefix) -> list:
 
 
 def presigned_get(key, expires=3600, download_name=None) -> str:
+    """A URL a client can GET. Signed against the S3 endpoint by default; a plain
+    URL on the bucket's custom domain when R2_PUBLIC_BASE is set.
+
+    Switching here rather than at each call site on purpose: every caller hands
+    the result to a browser, and the S3 endpoint is the one variant browsers
+    cannot reliably fetch (see settings.r2_public_base). The custom domain has no
+    equivalent of ResponseContentDisposition, so a download keeps the object's
+    own name, which is already the clip filename.
+    """
+    base = settings.r2_public_base
+    if base:
+        return f"{base}/{quote(key, safe='/')}"
     params = {"Bucket": settings.r2_bucket, "Key": key}
     if download_name:
         params["ResponseContentDisposition"] = f'attachment; filename="{download_name}"'
