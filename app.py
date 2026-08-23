@@ -1693,6 +1693,11 @@ async def process_endpoint(
     cmd = [sys.executable, "-u", "main.py"] # -u for unbuffered
     env = os.environ.copy()
     env["GEMINI_API_KEY"] = api_key # Override with key from request
+    # The stdio fix above only covers this process. main.py prints an emoji on
+    # its first line and configures nothing, so on a cp1252 console the child
+    # still dies before it renders anything -- the server starts and every job
+    # fails instead. setdefault, so an explicit PYTHONIOENCODING still wins.
+    env.setdefault("PYTHONIOENCODING", "utf-8")
 
     # Optional layouts are per job. The renderer reads these at import time in
     # the subprocess, so they must be set before Popen — same path WATERMARK
