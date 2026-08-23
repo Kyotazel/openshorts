@@ -5,6 +5,7 @@ import argparse
 import re
 import sys
 import threading
+import unicodedata
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from scenedetect import open_video, SceneManager
@@ -599,6 +600,14 @@ def truncate_bytes(text, max_bytes):
 
 def sanitize_filename(filename):
     """Remove invalid characters from filename and bound it for the filesystem."""
+    # "canción" has two Unicode spellings: a precomposed ó (NFC) or an o plus a
+    # combining acute (NFD). yt-dlp hands over titles in either, and the name
+    # becomes the clip file, the R2 key and the URL path. Measured 24-ago-2026:
+    # a key carrying the combining form is fetchable by a <video> element but a
+    # fetch() of the same URL comes back 503, which broke the download button on
+    # every clip with a Spanish title. Normalising here fixes the whole chain at
+    # its source, and is a no-op for the ASCII names that already worked.
+    filename = unicodedata.normalize('NFC', filename)
     filename = re.sub(r'[<>:"/\\|?*#]', '', filename)
     filename = filename.replace(' ', '_')
     return truncate_bytes(filename, MAX_TITLE_BYTES)

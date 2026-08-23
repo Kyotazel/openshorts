@@ -52,6 +52,21 @@ class TestSanitizeFilename:
         assert main.sanitize_filename('a<b>c:d"e/f\\g|h?i*j#k') == "abcdefghijk"
         assert main.sanitize_filename("with spaces") == "with_spaces"
 
+    def test_combining_accents_are_precomposed(self):
+        """A Spanish title arrives from yt-dlp in either Unicode spelling.
+
+        The decomposed form (o + U+0301) survived into the R2 key and the URL,
+        where a fetch() of the object came back 503 while a <video> element
+        loaded it fine — the download button broke on every accented title
+        (24-ago-2026). Both spellings must produce the same, precomposed name.
+        """
+        decomposed = "cancio\u0301n"     # o + combining acute
+        precomposed = "canci\u00f3n"     # single ó
+        assert decomposed != precomposed
+        assert main.sanitize_filename(decomposed) == precomposed
+        assert main.sanitize_filename(precomposed) == precomposed
+        assert "\u0301" not in main.sanitize_filename("Ha\u0301bitos_Nº1")
+
     def test_the_old_character_cap_would_have_overflowed(self):
         # Documents why the rule changed: 100 chars of Bengali is ~300 bytes.
         assert len((BENGALI * 4)[:100].encode("utf-8")) > FS_LIMIT
