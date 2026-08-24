@@ -279,7 +279,17 @@ def _analyze_trajectory(input_video, scenes_boundaries, scene_strategies,
                 cameraman.target_center_x = orig_w / 2
                 xs.append(None)
             else:
-                if frame_number % m.DETECT_STRIDE == 0:
+                is_scene_start = (
+                    current_scene_index < len(scenes_boundaries)
+                    and frame_number == scenes_boundaries[current_scene_index][0])
+                cut = is_scene_start and m.SCENE_CUT_RESET
+                if cut:
+                    # New shot: forget the old subject and cut to the new one
+                    # (see SmoothedCameraman.begin_scene).
+                    tracker.reset()
+                    cameraman.begin_scene()
+
+                if frame_number % m.DETECT_STRIDE == 0 or cut:
                     candidates = m.detect_face_candidates(frame)
                     for cand in candidates:
                         cand['box'] = [int(v * scale) for v in cand['box']]
@@ -287,14 +297,11 @@ def _analyze_trajectory(input_video, scenes_boundaries, scene_strategies,
                     target_box = tracker.get_target(candidates, frame_number, orig_w)
                     if target_box:
                         cameraman.update_target(target_box)
-                    elif frame_number % m.YOLO_FALLBACK_STRIDE == 0:
+                    elif frame_number % m.YOLO_FALLBACK_STRIDE == 0 or cut:
                         person_box = m.detect_person_yolo(frame)
                         if person_box:
                             cameraman.update_target([int(v * scale) for v in person_box])
 
-                is_scene_start = (
-                    current_scene_index < len(scenes_boundaries)
-                    and frame_number == scenes_boundaries[current_scene_index][0])
                 x1, _y1, _x2, _y2 = cameraman.get_crop_box(force_snap=is_scene_start)
                 xs.append(x1)
 

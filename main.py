@@ -93,6 +93,12 @@ face_detection = mp_face_detection.FaceDetection(model_selection=1, min_detectio
 # damping can be dialled back without a deploy; 1 restores the old behaviour.
 JUMP_CONFIRM_FRAMES = max(int(os.environ.get("JUMP_CONFIRM_FRAMES", "3")), 1)
 
+# Reset the tracker and the cameraman's damping at every scene cut, so the
+# first face found in the new shot is framed instantly instead of being treated
+# as a suspicious "jump" from the previous shot's subject (see
+# SmoothedCameraman.begin_scene). 0 restores the old behaviour.
+SCENE_CUT_RESET = os.environ.get("SCENE_CUT_RESET", "1") != "0"
+
 
 class SmoothedCameraman:
     """
@@ -146,6 +152,26 @@ class SmoothedCameraman:
         self.jump_confirm_frames = JUMP_CONFIRM_FRAMES
         self._pending_target = None
         self._pending_count = 0
+        self._snap_pending = False
+
+    def begin_scene(self):
+        """Forget the previous shot's subject at a scene cut.
+
+        The jump damping above exists to reject detector noise INSIDE a shot.
+        Across a cut it does the opposite of what is wanted: the new shot's face
+        is (by construction) far from the old target, so it was held back for
+        JUMP_CONFIRM_FRAMES detections and the camera then panned towards it at
+        pan speed. On a real two-camera podcast (24-aug-2026) that showed up as
+        a headless torso for 1.5s after every cut while the frame slid over to
+        the speaker. The snap at the scene's first frame did not help: the
+        target it snapped to was still the previous shot's.
+
+        So: drop any pending jump, and cut (rather than pan) to the first target
+        accepted in the new shot.
+        """
+        self._pending_target = None
+        self._pending_count = 0
+        self._snap_pending = True
 
     def update_target(self, face_box):
         """Update the target centre from a detection, ignoring lone big jumps."""
@@ -153,6 +179,14 @@ class SmoothedCameraman:
             return
         x, y, w, h = face_box
         new_center = x + w / 2
+
+        if self._snap_pending:
+            self._snap_pending = False
+            self._pending_target = None
+            self._pending_count = 0
+            self.target_center_x = new_center
+            self.current_center_x = new_center
+            return
 
         if abs(new_center - self.target_center_x) > self.safe_zone_radius:
             # Same big move as last time? Count it. Otherwise start counting
@@ -239,6 +273,21 @@ class SpeakerTracker:
         # ID tracking
         self.next_id = 0
         self.known_faces = [] # [{'id': 0, 'center': x, 'last_frame': 123}]
+
+    def reset(self):
+        """Forget every speaker at a scene cut.
+
+        Identity, hysteresis and the switch cooldown are all about continuity
+        within a shot. After a cut none of it applies: the sticky x3 bonus and
+        the cooldown were holding the previous shot's speaker (returning None)
+        for up to 30 frames while a new face sat unframed.
+        """
+        self.active_speaker_id = None
+        self.speaker_scores = {}
+        self.last_seen = {}
+        self.locked_counter = 0
+        self.last_switch_frame = -1000
+        self.known_faces = []
 
     def get_target(self, face_candidates, frame_number, width):
         """
@@ -1190,20 +1239,25 @@ def process_video_to_vertical(input_video, final_output_video, aspect_ratio=ASPE
 
                 # Detect every Nth frame for performance (cameraman smooths in
                 # between); the much heavier YOLO fallback gets its own stride.
-                if frame_number % DETECT_STRIDE == 0:
+                # Snap camera on scene change to avoid panning from previous scene position
+                is_scene_start = (frame_number == scene_boundaries[current_scene_index][0])
+                if is_scene_start and SCENE_CUT_RESET:
+                    speaker_tracker.reset()
+                    cameraman.begin_scene()
+
+                # Always detect on a cut, whatever the stride: the new shot's
+                # subject has to be found before the first frame is framed.
+                if frame_number % DETECT_STRIDE == 0 or (is_scene_start and SCENE_CUT_RESET):
                     t_det = time.time()
                     candidates = detect_face_candidates(frame)
                     target_box = speaker_tracker.get_target(candidates, frame_number, original_width)
                     if target_box:
                         cameraman.update_target(target_box)
-                    elif frame_number % YOLO_FALLBACK_STRIDE == 0:
+                    elif frame_number % YOLO_FALLBACK_STRIDE == 0 or (is_scene_start and SCENE_CUT_RESET):
                         person_box = detect_person_yolo(frame)
                         if person_box:
                             cameraman.update_target(person_box)
                     stage_seconds['detect'] += time.time() - t_det
-
-                # Snap camera on scene change to avoid panning from previous scene position
-                is_scene_start = (frame_number == scene_boundaries[current_scene_index][0])
 
                 x1, y1, x2, y2 = cameraman.get_crop_box(force_snap=is_scene_start)
 
