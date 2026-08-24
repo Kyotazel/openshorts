@@ -1546,6 +1546,24 @@ def get_viral_clips(transcript_result, video_duration):
         return None
 
 
+# --- Speech too sparse to clip by transcript -------------------------------
+# The vision path used to fire only on a missing audio TRACK. A nursery-rhyme
+# video or a dashcam drive has audio, so it went through transcription, came
+# back as one segment ("Uh uh"), produced one scoring window and Gemini
+# returned no clips — three failed jobs on 25-aug-2026, one user twice. Speech
+# is ~120-160 words/min; below these floors there is nothing to clip by words.
+MIN_SPEECH_WORDS_PER_MIN = float(os.environ.get("MIN_SPEECH_WORDS_PER_MIN", "5"))
+MIN_SPEECH_WORDS = int(os.environ.get("MIN_SPEECH_WORDS", "8"))
+
+
+def speech_is_sparse(transcript, duration):
+    """True when the transcript is too thin to drive clip selection."""
+    words = sum(len((seg.get("text") or "").split())
+                for seg in (transcript or {}).get("segments", []))
+    minutes = max(float(duration or 0) / 60.0, 1e-6)
+    return words < MIN_SPEECH_WORDS or words / minutes < MIN_SPEECH_WORDS_PER_MIN
+
+
 def get_visual_clips(video_path, video_duration, language="en"):
     """Clip a SILENT video by vision: Gemini watches the footage and picks the
     most engaging visual moments (no transcript). Returns the same
@@ -1755,6 +1773,14 @@ if __name__ == '__main__':
                 save_transcript_checkpoint(output_dir, transcript, input_video, duration)
             except NoAudioError as e:
                 print(f"🔇 {e} — switching to visual analysis.")
+
+        # Music-only or wordless footage transcribes to a handful of words.
+        # Clip it by what is on screen instead, like a video with no audio.
+        if transcript is not None and speech_is_sparse(transcript, duration):
+            n_words = sum(len((sg.get("text") or "").split()) for sg in transcript["segments"])
+            print(f"🔇 Only {n_words} word(s) of speech in {duration:.0f}s — "
+                  f"switching to visual analysis.")
+            transcript = None
 
         # 4. Gemini Analysis (transcript-driven, or vision for silent videos)
         if transcript is not None:
