@@ -237,6 +237,18 @@ Stripe retry the same doomed event for three days.
 ### Concurrency Model
 Async job queue with semaphore-based concurrency control. Configure via `MAX_CONCURRENT_JOBS` env var (default: 5). Jobs auto-cleanup after 1 hour.
 
+### Deploys interrupt running jobs
+
+Every push to `main` redeploys the API container and Coolify does not wait for
+the queue to drain. An interrupted job is re-enqueued on startup from its
+`.resume.json` manifest (`app.py:_resume_interrupted_jobs`, max 2 attempts) and
+re-runs with the same command and output directory. `main.py` leaves the
+finished transcript in that directory (`.transcript_checkpoint.json`) so the
+re-run skips the slow, paid transcription; the download and the
+Gemini analysis still repeat. Before pushing: batch small commits (tests, docs)
+with the next real change instead of giving them their own deploy, and check
+that no job is mid-flight in the prod container.
+
 ## Environment Variables
 
 **Server-side (.env):**
