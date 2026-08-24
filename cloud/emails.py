@@ -140,3 +140,31 @@ async def send_out_of_minutes_email(email: str, upgrade_url: str):
     """
     print(f"✉️  Out-of-minutes upsell email → {email}")
     await send_email(email, "Your video is waiting — you're out of free minutes", html)
+
+
+async def send_account_deleted_email(email: str):
+    """Confirmation that an account was erased. Sent last, to an address we no
+    longer hold: this is the only notice the user will ever get, and it is also
+    the only signal they would have if the deletion had not been theirs.
+    """
+    html = """
+      <div style="font-family:system-ui,sans-serif;max-width:480px;margin:0 auto">
+        <h2>Your OpenShorts account has been deleted</h2>
+        <p>Everything is gone: your account, your projects, your clips and their
+           transcripts, your API keys, and the connection to any social accounts
+           you had linked. Any active subscription was cancelled.</p>
+        <p>Two things we keep, and why:</p>
+        <ul style="line-height:1.7;padding-left:20px">
+          <li><strong>Your invoices</strong>, for six years &mdash; Spanish
+              commercial law requires it.</li>
+          <li><strong>A record that this deletion happened</strong>, holding a
+              one-way hash of your email address and nothing else.</li>
+        </ul>
+        <p>You can sign up again any time with the same address; it will be a
+           brand-new, empty account.</p>
+        <p style="color:#666;font-size:13px">If this wasn't you, reply to this
+           email straight away &mdash; info@openshorts.app.</p>
+      </div>
+    """
+    print(f"✉️  Account-deleted confirmation → {email}")
+    await send_email(email, "Your OpenShorts account has been deleted", html)

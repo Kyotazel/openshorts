@@ -4,6 +4,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { apiJson } from '../lib/api';
 import { track } from '../lib/analytics';
 import ApiKeysCard from './ApiKeysCard';
+import DeleteAccountCard from './DeleteAccountCard';
 import SocialAnalyticsCard from './SocialAnalyticsCard';
 
 const fmt1 = (n) => Math.round((n || 0) * 10) / 10;
@@ -203,6 +204,8 @@ export default function AccountPage() {
       )}
 
       <ApiKeysCard />
+
+      <DeleteAccountCard />
     </div>
   );
 }

@@ -176,6 +176,7 @@ se desactiva porque el modelo diga `none`.
 | POST | `/api/social/post` | Post to social media (async upload) |
 | POST | `/mcp` | MCP server (JSON-RPC): the pipeline as agent tools |
 | POST/GET/DELETE | `/api/keys` | User API keys (cloud mode, session JWT only) |
+| DELETE | `/api/account` | Erase the account and everything in it (GDPR art. 17) |
 
 ### Agent access (MCP, API keys, webhooks)
 
@@ -196,6 +197,31 @@ se desactiva porque el modelo diga `none`.
   Fired once per job from `run_job_wrapper` after the R2 archive so the payload
   can carry durable download links; survives redeploys via the resume manifest.
   `PUBLIC_API_URL` env sets the absolute-URL base when behind a proxy.
+
+### Account erasure (GDPR art. 17)
+
+`DELETE /api/account` (`cloud/account.py`, dashboard: Account → Delete account)
+is immediate and irreversible: there is no recovery window because after the
+delete there is nothing left to authenticate a recovery request against. It
+refuses API-key auth (a leaked `osk_` must not destroy its own account) and
+requires the caller to retype the account email.
+
+The order of the steps is the design, and each one is a failure mode:
+**Stripe cancel first**, aborting the whole thing if it fails, so we never erase
+a user we are still billing; **R2 before the database**, because those rows are
+the only index of which objects are theirs and dropping them first turns a
+failed purge into permanent orphans; the DB delete is **one transaction** over
+an explicit table list (`USER_OWNED_TABLES`) rather than the declared ON DELETE
+CASCADEs, since `create_all` never ALTERs an existing table and a constraint
+added after a table shipped exists in the models but not in production.
+`tests/test_account_erasure.py` fails if a new table references `users.id`
+without joining that list.
+
+What deliberately survives: the Stripe customer and its invoices (6-year
+retention, Spanish commercial law) and one `account_deletions` row holding a
+sha256 of the email as proof the erasure happened, itself purged after 5 years.
+`app.py` registers a callback so the local `output/` and `uploads/` working
+files go too, instead of waiting for the hourly sweep.
 
 ### Concurrency Model
 Async job queue with semaphore-based concurrency control. Configure via `MAX_CONCURRENT_JOBS` env var (default: 5). Jobs auto-cleanup after 1 hour.

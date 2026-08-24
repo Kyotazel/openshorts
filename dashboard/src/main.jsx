@@ -43,11 +43,35 @@ function AccountView() {
   return <PageShell><AccountPage /></PageShell>;
 }
 
+// Landing spot after an account is erased. Its own view because the session is
+// gone: sending the user to #/account would bounce them to pricing with no
+// explanation, and "openshorts_skip_landing" would send them into the app.
+function DeletedView() {
+  return (
+    <div className="min-h-screen bg-paper text-ink2 flex items-center justify-center p-6">
+      <div className="max-w-md text-center space-y-4">
+        <h1 className="font-display lowercase text-2xl sm:text-3xl text-ink">Your account is deleted</h1>
+        <p className="text-sm">
+          Your projects, clips and transcripts are gone, any subscription is
+          cancelled, and your API keys no longer work. We've emailed you a
+          confirmation with the details.
+        </p>
+        <p className="text-sm text-muted">
+          You're welcome back any time — signing up again with the same address
+          starts a brand-new, empty account.
+        </p>
+        <a href="#landing" className="btn-ghost px-4 py-2 inline-flex">Back to openshorts.app</a>
+      </div>
+    </div>
+  );
+}
+
 function Root() {
   const resolveView = () => {
     const hash = window.location.hash || '';
     if (hash.startsWith('#/auth/')) return 'auth';       // AuthContext consumes then redirects
     if (hash.startsWith('#/account')) return 'account';
+    if (hash.startsWith('#/deleted')) return 'deleted';
     if (hash.startsWith('#/pricing')) return 'pricing';
     if (hash === '#legal') return 'legal';
     // #landing = explicit landing view (app logo); section anchors keep the landing mounted
@@ -73,6 +97,7 @@ function Root() {
   if (view === 'legal') return <Legal />;
   if (view === 'pricing') return <PricingView />;
   if (view === 'account') return <AccountView />;
+  if (view === 'deleted') return <DeletedView />;
   if (view === 'auth') {
     return <div className="min-h-screen flex items-center justify-center bg-background text-zinc-400">Signing you in…</div>;
   }

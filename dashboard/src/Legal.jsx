@@ -6,7 +6,7 @@ import { ArrowLeft, FileText, Shield, Landmark } from 'lucide-react';
 // versions). This in-app view is a hub with the plain-language summary and
 // links, so the SPA route (#legal) and the crawlable pages never drift: the
 // full text lives in exactly one place.
-const LAST_UPDATED = '2026-08-19';
+const LAST_UPDATED = '2026-08-24';
 const SUPPORT_EMAIL = 'info@openshorts.app';
 
 const DOCS = [
@@ -59,6 +59,7 @@ export default function Legal() {
                         <li><strong className="text-ink">You must have the rights</strong> to every video you upload or link, and you are the publisher of what you post.</li>
                         <li><strong className="text-ink">No third-party trackers.</strong> Analytics is self-hosted; free-plan clips are deleted after 7 days.</li>
                         <li><strong className="text-ink">Cancel anytime</strong> from your account. EU consumers keep their 14-day withdrawal right.</li>
+                        <li><strong className="text-ink">Delete everything anytime.</strong> Account &rarr; Delete account erases your projects, clips and keys on the spot. No email to us, no waiting.</li>
                     </ul>
                     <p>
                         The full documents (English, with Spanish versions that prevail for consumers in Spain):

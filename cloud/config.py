@@ -277,6 +277,11 @@ class Settings:
 # Days a user's videos survive after their subscription ends (grace period).
 VIDEO_RETENTION_GRACE_DAYS = 7
 
+# How long the erasure log (cloud/models.AccountDeletion) is kept. Matches the
+# "rights declarations and related logs: up to 5 years" line in the privacy
+# policy, which in turn matches the statute of limitations for civil claims.
+DELETION_LOG_RETENTION_DAYS = 5 * 365
+
 
 settings = Settings()
 

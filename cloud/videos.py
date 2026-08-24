@@ -462,6 +462,8 @@ async def _sweeper_loop():
             await purge_free_expired()
             from .auth import purge_stale_magic_tokens
             await purge_stale_magic_tokens()
+            from .account import purge_stale_deletion_records
+            await purge_stale_deletion_records()
         except asyncio.CancelledError:
             break
         except Exception as e:

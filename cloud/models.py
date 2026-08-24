@@ -221,3 +221,33 @@ class StripeEvent(Base):
     type = Column(Text, nullable=True)
     created = Column(DateTime(timezone=True), nullable=True)
     processed_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class AccountDeletion(Base):
+    """Proof that an account was erased, kept after the user row is gone.
+
+    GDPR Art. 17 erasure has an accountability twin (Art. 5.2): if a former user
+    later claims we never deleted their account, the only way to answer is a
+    record that outlives the deletion. So this holds no readable identity — a
+    sha256 of the account email, which can confirm "yes, this address was
+    deleted on this date" without storing the address itself.
+
+    ``stripe_customer_id`` is the one exception and it is deliberate: the
+    invoices behind it must be kept for six years under Spanish commercial law,
+    so the reference that lets us find them survives too (privacy policy §5).
+    There is no FK to ``users`` — the whole point is that the row it would
+    reference no longer exists.
+
+    Rows are dropped after DELETION_LOG_RETENTION_DAYS by the retention sweeper,
+    matching the "rights declarations and related logs: up to 5 years" line in
+    the privacy policy.
+    """
+    __tablename__ = "account_deletions"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    former_user_id = Column(Text, nullable=False)        # the old uuid, resolves to nothing now
+    email_sha256 = Column(Text, nullable=False, index=True)
+    stripe_customer_id = Column(Text, nullable=True)
+    plan_at_deletion = Column(String(20), nullable=True)
+    r2_objects_deleted = Column(Integer, nullable=True)
+    reason = Column(Text, nullable=True)                 # optional free-text the user typed
+    deleted_at = Column(DateTime(timezone=True), server_default=func.now())

@@ -18,7 +18,7 @@
  * service; AI labelling follows AI Act art. 50.
  */
 
-const PUBLISHED = '2026-08-19'
+const PUBLISHED = '2026-08-24'
 
 const TERMS_EN = `
 <h2>1. Who we are</h2>
@@ -608,10 +608,15 @@ of limitations for civil claims.</li>
 <p>You can ask us for access, rectification, erasure, restriction, portability
 of your data, and object to processing based on legitimate interest — just
 email info@openshorts.app from your account address; we answer within one
-month. Deleting your account from the dashboard removes your content on the
-schedule above. If you believe we are mishandling your data, you can complain
-to the Spanish supervisory authority (AEPD, aepd.es) or to the authority of
-your own EU country.</p>
+month. You do not need to ask us to erase your account: <strong>Account →
+Delete account</strong> in the dashboard does it yourself, immediately and
+permanently, taking your projects, clips, transcripts, API keys and social
+connections with it and cancelling any active subscription. Two things survive
+it, both listed in section 5: your invoices, which tax law requires us to keep,
+and a one-way hash of your email address recording that the deletion happened.
+If you believe we are mishandling your data, you can complain to the Spanish
+supervisory authority (AEPD, aepd.es) or to the authority of your own EU
+country.</p>
 
 <h2>7. Age</h2>
 <p>The service is not directed at children. You must be at least 16, or the
@@ -739,10 +744,16 @@ meses.</li>
 <p>Puedes pedirnos acceso, rectificación, supresión, limitación y portabilidad
 de tus datos, y oponerte a los tratamientos basados en interés legítimo —
 basta un email a info@openshorts.app desde la dirección de tu cuenta;
-respondemos en el plazo de un mes. Eliminar tu cuenta desde el panel elimina tu
-contenido con el calendario indicado arriba. Si crees que tratamos mal tus
-datos, puedes reclamar ante la Agencia Española de Protección de Datos (AEPD,
-aepd.es) o ante la autoridad de tu país de la UE.</p>
+respondemos en el plazo de un mes. Para la supresión no necesitas pedírnosla:
+<strong>Cuenta → Eliminar cuenta</strong> en el panel la ejecuta tú mismo, de
+forma inmediata y permanente, y se lleva por delante tus proyectos, clips,
+transcripciones, claves de API y conexiones con redes sociales, además de
+cancelar cualquier suscripción activa. Solo sobreviven dos cosas, ambas
+recogidas en el apartado 5: tus facturas, que la normativa fiscal nos obliga a
+conservar, y un hash irreversible de tu dirección de email que acredita que la
+eliminación se produjo. Si crees que tratamos mal tus datos, puedes reclamar
+ante la Agencia Española de Protección de Datos (AEPD, aepd.es) o ante la
+autoridad de tu país de la UE.</p>
 
 <h2>7. Edad</h2>
 <p>El servicio no está dirigido a menores. Para crear una cuenta debes tener al

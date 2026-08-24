@@ -1218,6 +1218,47 @@ async def _settle_reservation(job_id):
     except Exception as e:
         print(f"⚠️  Reservation settle error for {job_id}: {e}")
 
+def _purge_local_jobs_for_user(user_id) -> int:
+    """Delete this user's job dirs, source uploads and in-memory job records.
+
+    Called by cloud/account.py when an account is erased. The durable copies
+    live on R2 and are deleted there; these are the working files on the API's
+    own disk, which would otherwise sit around until the one-hour cleanup sweep
+    — a long time to keep the videos of someone who just asked to be forgotten.
+
+    Ownership comes from the ``.owner`` file each managed job writes, so jobs
+    recovered from disk after a restart (no in-memory record) are covered too.
+    """
+    uid = str(user_id)
+    job_ids = {jid for jid, job in list(jobs.items())
+               if job.get('user_id') is not None and str(job['user_id']) == uid}
+    try:
+        entries = os.listdir(OUTPUT_DIR)
+    except OSError:
+        entries = []
+    for job_id in entries:
+        owner_path = os.path.join(OUTPUT_DIR, job_id, ".owner")
+        try:
+            with open(owner_path) as f:
+                if f.read().strip() == uid:
+                    job_ids.add(job_id)
+        except OSError:
+            continue
+
+    for job_id in job_ids:
+        shutil.rmtree(os.path.join(OUTPUT_DIR, job_id), ignore_errors=True)
+        jobs.pop(job_id, None)
+        # Source uploads are named "<job_id>_<filename>" (see /api/process).
+        for path in glob.glob(os.path.join(UPLOAD_DIR, f"{glob.escape(job_id)}_*")):
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+    if job_ids:
+        print(f"🗑️  Purged {len(job_ids)} local job dir(s) for erased user {uid}.")
+    return len(job_ids)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Rehydrate finished jobs from disk before serving (survives restarts).
@@ -1230,6 +1271,9 @@ async def lifespan(app: FastAPI):
     cleanup_task = asyncio.create_task(cleanup_jobs())
     if BILLING_ENABLED:
         await cloud.setup_async(app, keep_reservation_ids=_resumed_reservation_ids)
+        # Account erasure lives in cloud/, which can't import app.py; hand it the
+        # one thing only this module can do — wipe the local working files.
+        cloud.account.register_local_purge(_purge_local_jobs_for_user)
         # Nag on Telegram while the residential proxy is down/out of credits —
         # a single job-failure alert is easy to miss and ingest stays broken
         # until someone tops the balance up.
