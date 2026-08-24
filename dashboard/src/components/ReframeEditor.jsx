@@ -137,8 +137,10 @@ export default function ReframeEditor({ jobId, clipIndex, clipTitle, onClose, on
     };
 
     return (
-        <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4">
-            <div className="card w-full max-w-3xl max-h-[90vh] flex flex-col">
+        /* Bottom sheet on a phone, centred dialog from sm — same shape as the
+           shared Modal so the app has one overlay idiom, not two. */
+        <div className="fixed inset-0 z-50 bg-black/80 flex items-end sm:items-center justify-center p-0 sm:p-4">
+            <div className="card w-full max-w-3xl max-h-[92vh] sm:max-h-[90vh] flex flex-col rounded-b-none sm:rounded-card animate-sheet-up sm:animate-none">
                 <div className="flex items-center justify-between p-4 border-b border-rule">
                     <div className="flex items-center gap-2.5 min-w-0">
                         <Crosshair size={18} className="text-brass shrink-0" />
@@ -152,7 +154,7 @@ export default function ReframeEditor({ jobId, clipIndex, clipTitle, onClose, on
                     </button>
                 </div>
 
-                <div className="flex-1 overflow-y-auto p-4 space-y-5">
+                <div className="flex-1 overflow-y-auto overscroll-contain custom-scrollbar p-4 space-y-5">
                     <p className="text-xs text-muted leading-relaxed">
                         Play a scene to hear who is talking, then drag the rectangle over
                         the person you want. Each scene is one camera. Scenes you leave
@@ -191,13 +193,13 @@ export default function ReframeEditor({ jobId, clipIndex, clipTitle, onClose, on
                     ))}
                 </div>
 
-                <div className="flex items-center justify-between gap-3 p-4 border-t border-rule">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 border-t border-rule">
                     <span className="text-xs text-muted">
                         {adjusted === 0
                             ? 'nothing adjusted yet'
                             : `${adjusted} scene${adjusted > 1 ? 's' : ''} reframed by hand`}
                     </span>
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 [&>button]:flex-1 sm:[&>button]:flex-none">
                         <button onClick={onClose} className="btn-quiet py-2 px-4 text-sm">cancel</button>
                         <button
                             onClick={handleSave}
@@ -209,6 +211,7 @@ export default function ReframeEditor({ jobId, clipIndex, clipTitle, onClose, on
                         </button>
                     </div>
                 </div>
+                <div className="sm:hidden safe-bottom" />
             </div>
         </div>
     );

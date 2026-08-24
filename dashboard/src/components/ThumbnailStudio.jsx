@@ -434,7 +434,7 @@ export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUse
   };
 
   return (
-    <div className="h-full overflow-y-auto p-6 md:p-8 animate-fade">
+    <div className="h-full overflow-y-auto custom-scrollbar p-4 sm:p-6 md:p-8 animate-fade">
       <div className="max-w-5xl mx-auto">
         {/* Header */}
         <div className="flex items-end justify-between mb-2">

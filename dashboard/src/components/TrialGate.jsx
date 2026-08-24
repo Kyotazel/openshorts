@@ -6,10 +6,10 @@ import { Sparkles, ArrowRight } from 'lucide-react';
 // only fires for signed-out or magic-link-only accounts.
 export default function TrialGate({ toolName = 'this' }) {
   return (
-    <div className="card mx-6 mt-3 px-4 py-3 flex items-center justify-between gap-4 shrink-0 animate-fade">
-      <div className="flex items-center gap-3 text-sm">
-        <Sparkles size={16} className="shrink-0 text-brass" />
-        <div className="text-ink2 lowercase">
+    <div className="card mx-3 sm:mx-6 mt-3 px-3.5 sm:px-4 py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3 sm:gap-4 shrink-0 animate-fade">
+      <div className="flex items-start sm:items-center gap-2.5 sm:gap-3 text-sm min-w-0">
+        <Sparkles size={16} className="shrink-0 text-brass mt-0.5 sm:mt-0" />
+        <div className="text-ink2 lowercase leading-relaxed min-w-0">
           <span className="font-medium text-ink">Preview mode.</span>{' '}
           Sign in with <span className="font-medium text-ink">Google</span> to use {toolName} free —
           20 min/month, no credit card. <span className="text-muted">Or run it free by self-hosting.</span>
@@ -17,7 +17,7 @@ export default function TrialGate({ toolName = 'this' }) {
       </div>
       <button
         onClick={() => { window.location.hash = '#/pricing'; }}
-        className="btn-primary shrink-0 text-xs px-4 py-2"
+        className="btn-primary shrink-0 text-xs px-4 py-2 w-full sm:w-auto"
       >
         Start free <ArrowRight size={14} />
       </button>

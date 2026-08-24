@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Upload, Sparkles, Youtube, Instagram, Share2, ChevronDown, Check, Activity, LayoutDashboard, Settings, Plus, History, X, Terminal, Shield, LayoutGrid, Image, Globe, RotateCcw, Calendar, AlertTriangle, KeyRound, Bot, Users, Smartphone, ExternalLink, Copy, CheckCircle2, Mail, Loader2, Download } from 'lucide-react';
+import { Upload, Sparkles, Youtube, Instagram, Share2, ChevronDown, Check, Activity, LayoutDashboard, Settings, Plus, History, X, Terminal, Shield, LayoutGrid, Image, Globe, RotateCcw, Calendar, AlertTriangle, KeyRound, Bot, Users, Smartphone, ExternalLink, Copy, CheckCircle2, Mail, Loader2, Download, Menu } from 'lucide-react';
 import KeyInput from './components/KeyInput';
 import MediaInput from './components/MediaInput';
 import ResultCard from './components/ResultCard';
@@ -108,16 +108,19 @@ const UserProfileSelector = ({ profiles, selectedUserId, onSelect, onConnect }) 
     <div className="relative z-50">
       <button
         onClick={() => setIsOpen(!isOpen)}
-        className="flex items-center justify-between bg-paper2 border border-rule2 rounded-input px-3 py-2 text-sm text-ink2 hover:bg-paper3 transition-colors min-w-[180px]"
+        aria-label="social profile"
+        /* Phone: avatar + chevron only. A 180px pill next to the menu button,
+           the section title and the minutes meter overflowed a 360px header. */
+        className="flex items-center justify-between gap-1 bg-paper2 border border-rule2 rounded-input px-2 sm:px-3 py-2 text-sm text-ink2 hover:bg-paper3 transition-colors sm:min-w-[180px]"
       >
         <span className="flex items-center gap-2">
-          <div className="w-5 h-5 rounded-full bg-paper3 border border-rule flex items-center justify-center font-mono text-micro text-brass">
+          <div className="w-5 h-5 rounded-full bg-paper3 border border-rule flex items-center justify-center font-mono text-micro text-brass shrink-0">
             {autoId ? "S" : (selectedProfile?.username?.substring(0, 1).toUpperCase() || "U")}
           </div>
           {autoId ? (
-            <ProfileNetworkIcons profile={selectedProfile} size={13} />
+            <span className="hidden sm:flex"><ProfileNetworkIcons profile={selectedProfile} size={13} /></span>
           ) : (
-            <span className="font-medium text-ink truncate max-w-[100px]">{selectedProfile?.username || "Select User"}</span>
+            <span className="hidden sm:block font-medium text-ink truncate max-w-[100px]">{selectedProfile?.username || "Select User"}</span>
           )}
         </span>
         <ChevronDown size={14} className={`text-muted transition-transform ${isOpen ? 'rotate-180' : ''}`} />
@@ -245,9 +248,15 @@ function App() {
   // Pre-flight quality gate: { info: {max_height, min_height, cookies_invalid}, data }
   const [qualityGate, setQualityGate] = useState(null);
   const [logs, setLogs] = useState([]);
-  const [logsVisible, setLogsVisible] = useState(true);
+  // Collapsed on phones: the log tail is the least useful thing on a 360px
+  // screen and it was pushing the actual clips a full scroll down.
+  const [logsVisible, setLogsVisible] = useState(() => {
+    try { return window.innerWidth >= 768; } catch { return true; }
+  });
   const [processingMedia, setProcessingMedia] = useState(null);
   const [activeTab, setActiveTab] = useState('dashboard'); // dashboard, settings
+  // Mobile only: the full nav lives in a drawer behind the header's menu button.
+  const [navOpen, setNavOpen] = useState(false);
   // Reopened-project state (paid mode): per-clip {index, server_file, active_layers}
   // restored from the backend so ResultCards resume editing where they left off.
   const [projectState, setProjectState] = useState(null);
@@ -854,98 +863,236 @@ function App() {
 
   // --- UI Components ---
 
-  const Sidebar = () => {
-    const navItems = [
-      { id: 'dashboard', ord: '01', icon: LayoutDashboard, label: 'Clip Generator' },
-      { id: 'saasshorts', ord: '02', icon: Sparkles, label: 'AI Shorts', byok: true },
-      { id: 'ai-agent', ord: '03', icon: Bot, label: 'AI Agent', byok: true },
-      { id: 'ugc-gallery', ord: '04', icon: LayoutGrid, label: 'UGC Gallery' },
-      { id: 'thumbnails', ord: '05', icon: Image, label: 'YouTube Studio' },
-      ...(billingEnabled && isSignedIn ? [{ id: 'history', ord: '06', icon: History, label: 'History' }] : []),
-      { id: 'settings', ord: '07', icon: Settings, label: 'Settings' },
-    ];
+  // One nav definition drives all three surfaces: the desktop rail, the mobile
+  // drawer, and the bottom tab bar. `short` is the tab-bar label — the full one
+  // wraps to two lines in a 5-up bar on a 360px phone.
+  const navItems = [
+    { id: 'dashboard', ord: '01', icon: LayoutDashboard, label: 'Clip Generator', short: 'clips', primary: true },
+    { id: 'saasshorts', ord: '02', icon: Sparkles, label: 'AI Shorts', short: 'ai shorts', byok: true, primary: true },
+    { id: 'ai-agent', ord: '03', icon: Bot, label: 'AI Agent', short: 'agent', byok: true },
+    { id: 'ugc-gallery', ord: '04', icon: LayoutGrid, label: 'UGC Gallery', short: 'gallery', primary: true },
+    { id: 'thumbnails', ord: '05', icon: Image, label: 'YouTube Studio', short: 'studio', primary: true },
+    ...(billingEnabled && isSignedIn ? [{ id: 'history', ord: '06', icon: History, label: 'History', short: 'history' }] : []),
+    { id: 'settings', ord: '07', icon: Settings, label: 'Settings', short: 'settings' },
+  ];
+  const activeNav = navItems.find((n) => n.id === activeTab);
 
-    return (
-      <div className="w-20 lg:w-64 bg-paper2 border-r border-rule flex flex-col h-full shrink-0 transition-all duration-300">
-        <a href="#landing" className="p-6 flex items-center gap-3" title="go to landing page">
-          <div className="w-8 h-8 bg-paper3 rounded-input flex items-center justify-center shrink-0 overflow-hidden border border-rule">
-            <img src="/logo-openshorts.png" alt="Logo" className="w-full h-full object-cover" />
-          </div>
-          <span className="font-display lowercase text-lg text-ink hidden lg:block">openshorts</span>
+  // Escape closes the mobile drawer. The shell itself is overflow-hidden, so
+  // there is no body scroll to lock behind it.
+  useEffect(() => {
+    if (!navOpen) return;
+    const onKey = (e) => { if (e.key === 'Escape') setNavOpen(false); };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [navOpen]);
+
+  const goToTab = (id) => { setActiveTab(id); setNavOpen(false); };
+
+  // Shared footer links (landing, repo, pricing, contact) — same list in the
+  // desktop rail and the mobile drawer, so they can never drift apart.
+  const NavFooterLinks = ({ collapsed = false }) => (
+    <>
+      <a
+        href="#landing"
+        className="flex items-center gap-2 px-3 py-2 text-xs lowercase text-muted hover:text-ink2 transition-colors"
+      >
+        <Globe size={14} className="shrink-0" />
+        <span className={collapsed ? 'hidden lg:block truncate' : 'truncate'}>landing page</span>
+      </a>
+      <a
+        href="https://github.com/mutonby/openshorts"
+        target="_blank"
+        rel="noopener noreferrer"
+        className="flex items-center gap-2 px-3 py-2 text-xs lowercase text-muted hover:text-ink2 transition-colors"
+      >
+        <svg height="14" viewBox="0 0 16 16" version="1.1" width="14" aria-hidden="true" fill="currentColor" className="shrink-0"><path fillRule="evenodd" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"></path></svg>
+        <span className={collapsed ? 'hidden lg:block truncate' : 'truncate'}>open source</span>
+      </a>
+      {billingEnabled && (
+        <a
+          href="#/pricing"
+          className="flex items-center gap-2 px-3 py-2 text-xs lowercase text-muted hover:text-ink2 transition-colors"
+        >
+          <Sparkles size={14} className="shrink-0" />
+          <span className={collapsed ? 'hidden lg:block truncate' : 'truncate'}>plans &amp; pricing</span>
         </a>
+      )}
+      <a
+        href="mailto:info@openshorts.app"
+        className="flex items-center gap-2 px-3 py-2 text-xs lowercase text-muted hover:text-ink2 transition-colors"
+      >
+        <Mail size={14} className="shrink-0" />
+        <span className={collapsed ? 'hidden lg:block truncate' : 'truncate'}>info@openshorts.app</span>
+      </a>
+    </>
+  );
 
-        <nav className="flex-1 px-4 py-4 space-y-1">
+  // Desktop rail: icon-only from md, labelled from lg. Below md it is gone
+  // entirely — an unlabelled 80px rail ate a fifth of a phone screen.
+  const Sidebar = () => (
+    <div className="hidden md:flex w-20 lg:w-64 bg-paper2 border-r border-rule flex-col h-full shrink-0 transition-all duration-300">
+      <a href="#landing" className="p-6 flex items-center gap-3" title="go to landing page">
+        <div className="w-8 h-8 bg-paper3 rounded-input flex items-center justify-center shrink-0 overflow-hidden border border-rule">
+          <img src="/logo-openshorts.png" alt="Logo" className="w-full h-full object-cover" />
+        </div>
+        <span className="font-display lowercase text-lg text-ink hidden lg:block">openshorts</span>
+      </a>
+
+      <nav className="flex-1 px-4 py-4 space-y-1">
+        {navItems.map((item) => {
+          const NavIcon = item.icon;
+          const isActive = activeTab === item.id;
+          return (
+            <button
+              key={item.id}
+              onClick={() => setActiveTab(item.id)}
+              title={item.label}
+              className={`relative w-full flex items-center gap-3 px-3 py-2.5 rounded-input transition-colors ${isActive ? 'bg-paper3 text-ink' : 'text-muted hover:text-ink2 hover:bg-paper3/50'}`}
+            >
+              {isActive && (
+                <span className="absolute left-0 top-1.5 bottom-1.5 w-0.5 bg-brass rounded-full" aria-hidden="true" />
+              )}
+              <NavIcon size={18} className={`shrink-0 ${isActive ? 'text-brass' : ''}`} />
+              <span className="text-sm lowercase hidden lg:block flex-1 text-left truncate">{item.label}</span>
+              {item.byok && <span className="readout hidden lg:block">BYOK</span>}
+              <span className="readout hidden lg:block">{item.ord}</span>
+            </button>
+          );
+        })}
+      </nav>
+
+      <div className="p-4 border-t border-rule space-y-1">
+        <NavFooterLinks collapsed />
+      </div>
+    </div>
+  );
+
+  // Mobile drawer: the complete nav, reachable from the header's menu button.
+  const MobileNavDrawer = () => (
+    <div
+      className="md:hidden fixed inset-0 z-[90] flex"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Navigation"
+    >
+      <div
+        className="absolute inset-0 bg-black/60 animate-fade"
+        onClick={() => setNavOpen(false)}
+        aria-hidden="true"
+      />
+      <div className="relative w-[17rem] max-w-[82vw] h-full bg-paper2 border-r border-rule flex flex-col animate-slide-in-left">
+        <div className="flex items-center justify-between px-5 h-14 border-b border-rule shrink-0">
+          <a href="#landing" className="flex items-center gap-2.5" onClick={() => setNavOpen(false)}>
+            <div className="w-7 h-7 bg-paper3 rounded-input overflow-hidden border border-rule shrink-0">
+              <img src="/logo-openshorts.png" alt="" className="w-full h-full object-cover" />
+            </div>
+            <span className="font-display lowercase text-lg text-ink">openshorts</span>
+          </a>
+          <button
+            onClick={() => setNavOpen(false)}
+            aria-label="close navigation"
+            className="p-2 -mr-2 text-muted hover:text-ink transition-colors"
+          >
+            <X size={18} />
+          </button>
+        </div>
+
+        <nav className="flex-1 overflow-y-auto custom-scrollbar px-3 py-3 space-y-1">
           {navItems.map((item) => {
             const NavIcon = item.icon;
             const isActive = activeTab === item.id;
             return (
               <button
                 key={item.id}
-                onClick={() => setActiveTab(item.id)}
-                className={`relative w-full flex items-center gap-3 px-3 py-2.5 rounded-input transition-colors ${isActive ? 'bg-paper3 text-ink' : 'text-muted hover:text-ink2 hover:bg-paper3/50'}`}
+                onClick={() => goToTab(item.id)}
+                aria-current={isActive ? 'page' : undefined}
+                className={`relative w-full flex items-center gap-3 px-3 py-3 rounded-input transition-colors ${isActive ? 'bg-paper3 text-ink' : 'text-muted active:bg-paper3/60'}`}
               >
                 {isActive && (
-                  <span className="absolute left-0 top-1.5 bottom-1.5 w-0.5 bg-brass rounded-full" aria-hidden="true" />
+                  <span className="absolute left-0 top-2 bottom-2 w-0.5 bg-brass rounded-full" aria-hidden="true" />
                 )}
                 <NavIcon size={18} className={`shrink-0 ${isActive ? 'text-brass' : ''}`} />
-                <span className="text-sm lowercase hidden lg:block flex-1 text-left truncate">{item.label}</span>
-                {item.byok && <span className="readout hidden lg:block">BYOK</span>}
-                <span className="readout hidden lg:block">{item.ord}</span>
+                <span className="text-[0.95rem] lowercase flex-1 text-left truncate">{item.label}</span>
+                {item.byok && <span className="readout shrink-0">BYOK</span>}
               </button>
             );
           })}
         </nav>
 
-        <div className="p-4 border-t border-rule space-y-1">
-          <a
-            href="#landing"
-            className="flex items-center gap-2 px-3 py-1.5 text-xs lowercase text-muted hover:text-ink2 transition-colors"
-          >
-            <Globe size={14} className="shrink-0" />
-            <span className="hidden lg:block truncate">landing page</span>
-          </a>
-          <a
-            href="https://github.com/mutonby/openshorts"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="flex items-center gap-2 px-3 py-1.5 text-xs lowercase text-muted hover:text-ink2 transition-colors"
-          >
-            <svg height="14" viewBox="0 0 16 16" version="1.1" width="14" aria-hidden="true" fill="currentColor" className="shrink-0"><path fillRule="evenodd" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"></path></svg>
-            <span className="hidden lg:block truncate">open source</span>
-          </a>
-          {billingEnabled && (
-            <a
-              href="#/pricing"
-              className="flex items-center gap-2 px-3 py-1.5 text-xs lowercase text-muted hover:text-ink2 transition-colors"
-            >
-              <Sparkles size={14} className="shrink-0" />
-              <span className="hidden lg:block truncate">plans &amp; pricing</span>
-            </a>
-          )}
-          <a
-            href="mailto:info@openshorts.app"
-            className="flex items-center gap-2 px-3 py-1.5 text-xs lowercase text-muted hover:text-ink2 transition-colors"
-          >
-            <Mail size={14} className="shrink-0" />
-            <span className="hidden lg:block truncate">info@openshorts.app</span>
-          </a>
+        <div className="px-3 py-3 border-t border-rule space-y-0.5 safe-bottom shrink-0">
+          <NavFooterLinks />
         </div>
       </div>
+    </div>
+  );
+
+  // Bottom tab bar: the four everyday destinations plus "more" for the rest.
+  // It is a flex sibling of the scrolling pane rather than `fixed`, so nothing
+  // ever hides behind it and no pane needs compensating padding.
+  const MobileTabBar = () => {
+    const tabs = navItems.filter((n) => n.primary);
+    const moreActive = !tabs.some((t) => t.id === activeTab);
+    return (
+      <nav className="md:hidden shrink-0 border-t border-rule bg-paper2/95 backdrop-blur-sm safe-bottom">
+        <div className="flex items-stretch">
+          {tabs.map((item) => {
+            const NavIcon = item.icon;
+            const isActive = activeTab === item.id;
+            return (
+              <button
+                key={item.id}
+                onClick={() => goToTab(item.id)}
+                aria-current={isActive ? 'page' : undefined}
+                className={`flex-1 min-w-0 flex flex-col items-center justify-center gap-1 py-2 min-h-[56px] transition-colors ${isActive ? 'text-ink' : 'text-muted active:text-ink2'}`}
+              >
+                <NavIcon size={19} className={isActive ? 'text-brass' : ''} />
+                <span className="text-[10.5px] lowercase leading-none truncate max-w-full px-0.5">{item.short}</span>
+              </button>
+            );
+          })}
+          <button
+            onClick={() => setNavOpen(true)}
+            aria-label="more sections"
+            aria-expanded={navOpen}
+            className={`flex-1 min-w-0 flex flex-col items-center justify-center gap-1 py-2 min-h-[56px] transition-colors ${moreActive ? 'text-ink' : 'text-muted active:text-ink2'}`}
+          >
+            <Menu size={19} className={moreActive ? 'text-brass' : ''} />
+            <span className="text-[10.5px] lowercase leading-none">more</span>
+          </button>
+        </div>
+      </nav>
     );
   };
 
   return (
-    <div className="flex h-screen bg-paper overflow-hidden">
+    /* h-dvh where supported: on mobile Safari/Chrome `100vh` is the tallest the
+       viewport ever gets, so a h-screen shell hides its own bottom bar behind
+       the browser chrome until the user scrolls. */
+    <div className="flex h-screen supports-[height:100dvh]:h-[100dvh] bg-paper overflow-hidden">
       <Sidebar />
+      {navOpen && <MobileNavDrawer />}
 
-      <main className="flex-1 flex flex-col h-full overflow-hidden relative">
+      <main className="flex-1 min-w-0 flex flex-col h-full overflow-hidden relative">
         {/* Top Header */}
-        <header className="h-14 border-b border-rule bg-paper flex items-center justify-between px-6 shrink-0 z-10">
-          <div className="flex items-center gap-4">
+        <header className="h-14 border-b border-rule bg-paper flex items-center justify-between gap-2 px-3 sm:px-6 shrink-0 z-10">
+          <div className="flex items-center gap-2 sm:gap-4 min-w-0">
+            {/* Mobile: the drawer handle, and the section name the icon rail
+                used to carry. Without it a phone has no "where am I". */}
+            <button
+              onClick={() => setNavOpen(true)}
+              aria-label="open navigation"
+              className="md:hidden -ml-1 p-2 rounded-input text-muted active:bg-paper3 transition-colors shrink-0"
+            >
+              <Menu size={20} />
+            </button>
+            <span className="md:hidden font-display lowercase text-base text-ink truncate">
+              {activeNav?.label || 'openshorts'}
+            </span>
             {status !== 'idle' && (
               <button
                 onClick={handleReset}
-                className="btn-quiet px-3 py-1.5 text-xs"
+                className="btn-quiet px-3 py-1.5 text-xs shrink-0"
+                aria-label="New Project"
               >
                 <Plus size={14} />
                 <span className="hidden sm:inline">New Project</span>
@@ -953,7 +1100,7 @@ function App() {
             )}
           </div>
 
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-2 sm:gap-4 shrink-0">
             {userProfiles.length > 0 && (
               <UserProfileSelector
                 profiles={userProfiles}
@@ -986,21 +1133,23 @@ function App() {
             )}
             {billingEnabled && isSignedIn && <ProfileMenu />}
 
+            {/* Hidden below sm: the standing banner underneath already says the
+                same thing, and two warnings in a 360px header is just noise. */}
             {keysMissing && (
               <button
                 onClick={() => (billingEnabled && !isSignedIn ? setShowLogin(true) : setActiveTab('settings'))}
-                className="badge-warn hover:brightness-125 transition-all"
+                className="badge-warn hover:brightness-125 transition-all hidden sm:inline-flex"
                 title="Configure API keys or choose a plan"
               >
                 <AlertTriangle size={12} />
-                <span className="hidden sm:inline">
+                <span className="hidden md:inline">
                   {!apiKey && !uploadPostKey
                     ? 'Gemini & Upload-Post keys missing'
                     : !apiKey
                       ? 'Gemini API Key Missing'
                       : 'Upload-Post API Key Missing'}
                 </span>
-                <span className="sm:hidden">keys missing</span>
+                <span className="md:hidden">keys missing</span>
               </button>
             )}
           </div>
@@ -1008,10 +1157,10 @@ function App() {
 
         {/* Persistent Missing Keys Banner — visible on every screen */}
         {keysMissing && activeTab !== 'settings' && (
-          <div className="mx-4 sm:mx-6 mt-3 px-4 py-3 bg-paper2 border border-rule rounded-card flex flex-wrap items-center justify-between gap-3 sm:gap-4 shrink-0 animate-fade">
-            <div className="flex items-center gap-3 text-sm text-ink2">
-              <KeyRound size={16} className="shrink-0 text-warn" />
-              <div>
+          <div className="mx-3 sm:mx-6 mt-3 px-3.5 sm:px-4 py-3 bg-paper2 border border-rule rounded-card flex flex-wrap items-center justify-between gap-2.5 sm:gap-4 shrink-0 animate-fade">
+            <div className="flex items-start sm:items-center gap-2.5 sm:gap-3 text-sm text-ink2 min-w-0 flex-1">
+              <KeyRound size={16} className="shrink-0 text-warn mt-0.5 sm:mt-0" />
+              <div className="min-w-0">
                 <span className="font-medium text-ink">Required API keys missing.</span>{' '}
                 <span className="text-muted">
                   {!apiKey && !uploadPostKey
@@ -1024,7 +1173,7 @@ function App() {
             </div>
             <button
               onClick={() => setActiveTab('settings')}
-              className="btn-quiet px-3 py-1.5 text-xs shrink-0"
+              className="btn-quiet px-3 py-1.5 text-xs shrink-0 w-full sm:w-auto"
             >
               Go to Settings
             </button>
@@ -1033,14 +1182,18 @@ function App() {
 
         {/* Session Recovery Banner */}
         {sessionRecovered && (
-          <div className="mx-6 mt-2 px-4 py-3 bg-paper2 border border-rule rounded-card flex items-center justify-between animate-fade shrink-0">
-            <div className="flex items-center gap-2 text-sm text-ink2">
-              <RotateCcw size={16} className="text-brass" />
+          <div className="mx-3 sm:mx-6 mt-2 px-3.5 sm:px-4 py-3 bg-paper2 border border-rule rounded-card flex items-start justify-between gap-3 animate-fade shrink-0">
+            <div className="flex items-start sm:items-center gap-2 text-sm text-ink2 flex-wrap min-w-0">
+              <RotateCcw size={16} className="text-brass shrink-0 mt-0.5 sm:mt-0" />
               <span className="font-medium">Session recovered</span>
               <span className="text-muted text-xs">Your previous work has been restored.</span>
             </div>
-            <button onClick={() => setSessionRecovered(false)} className="text-muted hover:text-ink transition-colors">
-              <X size={14} />
+            <button
+              onClick={() => setSessionRecovered(false)}
+              aria-label="dismiss"
+              className="text-muted hover:text-ink transition-colors shrink-0 -m-1 p-1"
+            >
+              <X size={16} />
             </button>
           </div>
         )}
@@ -1141,7 +1294,7 @@ function App() {
                       Connect
                     </button>
                   </div>
-                  <p className="text-xs text-muted leading-relaxed">
+                  <div className="text-xs text-muted leading-relaxed">
                     Connect your Upload-Post account to enable one-click publishing.
                     <div className="mt-3 grid grid-cols-1 sm:grid-cols-3 gap-2">
                       <a href="https://app.upload-post.com/login" target="_blank" rel="noopener noreferrer" className="p-2 border border-rule rounded-input hover:bg-paper3 transition-colors flex flex-col gap-1">
@@ -1161,7 +1314,7 @@ function App() {
                     <span className="text-muted">
                       Keys are only stored in your browser. They are sent to the backend only to process your request, never stored server-side.
                     </span>
-                  </p>
+                  </div>
                 </div>
               </div>
 
@@ -1205,7 +1358,7 @@ function App() {
                       {elevenLabsSaved ? <><Check size={12} /> saved</> : 'Save'}
                     </button>
                   </div>
-                  <p className="text-xs text-muted leading-relaxed">
+                  <div className="text-xs text-muted leading-relaxed">
                     Get your API key from ElevenLabs to enable video translation.
                     <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-2">
                       <a href="https://elevenlabs.io/sign-up" target="_blank" rel="noopener noreferrer" className="p-2 border border-rule rounded-input hover:bg-paper3 transition-colors flex flex-col gap-1">
@@ -1221,7 +1374,7 @@ function App() {
                     <span className="text-muted">
                       Keys are only stored in your browser. They are sent to the backend only to process your request, never stored server-side.
                     </span>
-                  </p>
+                  </div>
                 </div>
               </div>
 
@@ -1263,7 +1416,7 @@ function App() {
                       {falSaved ? <><Check size={12} /> saved</> : 'Save'}
                     </button>
                   </div>
-                  <p className="text-xs text-muted leading-relaxed">
+                  <div className="text-xs text-muted leading-relaxed">
                     Get your API key from fal.ai to enable AI actor video generation.
                     <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-2">
                       <a href="https://fal.ai/dashboard/keys" target="_blank" rel="noopener noreferrer" className="p-2 border border-rule rounded-input hover:bg-paper3 transition-colors flex flex-col gap-1">
@@ -1279,7 +1432,7 @@ function App() {
                     <span className="text-muted">
                       Keys are only stored in your browser. Sent to backend only to process requests.
                     </span>
-                  </p>
+                  </div>
                 </div>
               </div>
             </div>
@@ -1409,7 +1562,7 @@ function App() {
           {/* View: UGC Gallery */}
           {activeTab === 'ugc-gallery' && (
             <div className="h-full overflow-y-auto custom-scrollbar animate-fade">
-              <div className="max-w-6xl mx-auto p-6 md:p-8">
+              <div className="max-w-6xl mx-auto p-4 sm:p-6 md:p-8">
                 <UGCGallery />
               </div>
             </div>
@@ -1418,7 +1571,7 @@ function App() {
           {/* View: History */}
           {activeTab === 'history' && (
             <div className="h-full overflow-y-auto custom-scrollbar animate-fade">
-              <div className="max-w-6xl mx-auto p-6 md:p-8">
+              <div className="max-w-6xl mx-auto p-4 sm:p-6 md:p-8">
                 <HistoryTab onReopenProject={restoreProject} />
               </div>
             </div>
@@ -1447,21 +1600,24 @@ function App() {
           {/* View: Dashboard (Idle) */}
           {activeTab === 'dashboard' && status === 'idle' && (
             <div className="h-full overflow-y-auto custom-scrollbar animate-fade">
-              <div className="min-h-full flex flex-col items-center justify-center px-4 py-6 sm:p-6">
-              <div className="max-w-xl w-full text-center space-y-8">
-                <div className="space-y-4">
-                  <p className="eyebrow">01 · CLIP GENERATOR</p>
-                  <h1 className="font-display lowercase text-4xl md:text-5xl text-ink">
+              <div className="min-h-full flex flex-col items-center justify-center px-4 py-5 sm:p-6">
+              {/* On a phone the hero used to fill the fold on its own and push
+                  the uploader — the whole point of the screen — below it. The
+                  eyebrow, the display size and the gaps all shrink first. */}
+              <div className="max-w-xl w-full text-center space-y-5 sm:space-y-8">
+                <div className="space-y-2.5 sm:space-y-4">
+                  <p className="eyebrow hidden sm:block">01 · CLIP GENERATOR</p>
+                  <h1 className="font-display lowercase text-3xl sm:text-4xl md:text-5xl text-ink">
                     Create Viral Shorts
                   </h1>
-                  <p className="text-muted text-lg">
+                  <p className="text-muted text-[15px] sm:text-lg leading-snug sm:leading-normal max-w-sm sm:max-w-none mx-auto">
                     Drop your long-form video below to instantly generate viral clips with AI.
                   </p>
                 </div>
 
                 <MediaInput onProcess={handleProcess} isProcessing={status === 'processing'} />
 
-                <div className="flex flex-wrap items-center justify-center gap-4 sm:gap-8 text-muted text-sm">
+                <div className="flex flex-wrap items-center justify-center gap-4 sm:gap-8 text-muted text-xs sm:text-sm">
                   <span className="flex items-center gap-2"><Youtube size={16} /> YouTube</span>
                   <span className="flex items-center gap-2"><Instagram size={16} /> Instagram</span>
                   <span className="flex items-center gap-2"><TikTokIcon size={16} /> TikTok</span>
@@ -1473,11 +1629,11 @@ function App() {
 
           {/* View: Processing / Results (Split View) */}
           {activeTab === 'dashboard' && (status === 'processing' || status === 'complete' || status === 'error') && (
-            <div className="h-full flex flex-col md:flex-row gap-4 p-4 overflow-y-auto md:overflow-y-hidden custom-scrollbar animate-fade">
+            <div className="h-full flex flex-col md:flex-row gap-3 md:gap-4 p-3 md:p-4 overflow-y-auto md:overflow-y-hidden custom-scrollbar animate-fade">
 
               {/* Left Panel: Preview & Status */}
-              <div className={`${status === 'complete' ? 'w-full md:w-[30%] lg:w-[25%]' : 'w-full md:w-[55%] lg:w-[60%]'} md:h-full flex flex-col shrink-0 md:shrink card p-4 sm:p-6 overflow-y-auto custom-scrollbar transition-all duration-700 ease-in-out`}>
-                <div className="mb-6 flex items-center justify-between">
+              <div className={`${status === 'complete' ? 'w-full md:w-[30%] lg:w-[25%]' : 'w-full md:w-[55%] lg:w-[60%]'} md:h-full flex flex-col shrink-0 md:shrink card p-3.5 sm:p-6 md:overflow-y-auto custom-scrollbar transition-all duration-700 ease-in-out`}>
+                <div className="mb-4 sm:mb-6 flex items-center justify-between gap-2">
                   <h2 className="text-sm font-medium text-ink lowercase flex items-center gap-2">
                     <Activity className={`text-brass ${status === 'processing' ? 'animate-pulse' : ''}`} size={18} />
                     Live Analysis
@@ -1501,6 +1657,19 @@ function App() {
                   />
                 )}
 
+                {/* Phones only. The scan box drops its invented telemetry at
+                    this size and the log terminal below starts collapsed, so
+                    without this the screen would say nothing about what the job
+                    is actually doing. The log tail is the real answer. */}
+                {status === 'processing' && (
+                  <div className="sm:hidden mb-3 flex items-start gap-2 text-xs text-ink2 min-w-0">
+                    <Loader2 size={14} className="animate-spin text-brass shrink-0 mt-px" />
+                    <span className="min-w-0 leading-snug break-words">
+                      {logs.length ? logs[logs.length - 1] : 'starting up…'}
+                    </span>
+                  </div>
+                )}
+
                 {/* The render is dead time: the user is watching a progress bar
                     with nothing to do, so this is where the one star ask goes. */}
                 {status === 'processing' && (
@@ -1510,21 +1679,29 @@ function App() {
                 )}
 
                 {/* Logs Terminal */}
-                <div className={`bg-paper rounded-card border border-rule overflow-hidden flex flex-col transition-all duration-500 ${status === 'complete' ? 'h-32 min-h-0 opacity-50 hover:opacity-100' : 'flex-1 min-h-[200px]'}`}>
-                  <div className="px-4 py-2 border-b border-rule flex items-center justify-between bg-paper2 shrink-0">
+                <div className={`bg-paper rounded-card border border-rule overflow-hidden flex flex-col transition-all duration-500 ${status === 'complete' ? `min-h-0 opacity-50 hover:opacity-100 ${logsVisible ? 'h-32' : 'h-auto'}` : `flex-1 ${logsVisible ? 'min-h-[160px] sm:min-h-[200px]' : 'min-h-0 flex-none'}`}`}>
+                  <button
+                    type="button"
+                    onClick={() => setLogsVisible(!logsVisible)}
+                    aria-expanded={logsVisible}
+                    className="w-full px-3.5 sm:px-4 py-2.5 border-b border-rule flex items-center justify-between gap-2 bg-paper2 shrink-0 text-left"
+                  >
                     <span className="readout flex items-center gap-2">
                       <Terminal size={12} /> System Logs
                     </span>
-                    <button onClick={() => setLogsVisible(!logsVisible)} className="text-muted hover:text-ink transition-colors">
-                      {logsVisible ? <ChevronDown size={14} /> : <ChevronDown size={14} className="rotate-180" />}
-                    </button>
-                  </div>
+                    <span className="flex items-center gap-2 text-muted">
+                      {!logsVisible && logs.length > 0 && (
+                        <span className="readout normal-case">{logs.length}</span>
+                      )}
+                      <ChevronDown size={16} className={logsVisible ? '' : 'rotate-180'} />
+                    </span>
+                  </button>
                   {logsVisible && (
-                    <div className="flex-1 p-4 overflow-y-auto font-mono text-xs space-y-1.5 custom-scrollbar text-muted">
+                    <div className="flex-1 p-3.5 sm:p-4 overflow-y-auto font-mono text-[11px] sm:text-xs space-y-1.5 custom-scrollbar text-muted break-words">
                       {logs.map((log, i) => (
                         <div key={i} className={`flex gap-2 ${log.toLowerCase().includes('error') ? 'text-danger' : 'text-muted'}`}>
-                          <span className="text-muted opacity-50 shrink-0">{new Date().toLocaleTimeString()}</span>
-                          <span>{log}</span>
+                          <span className="text-muted opacity-50 shrink-0 hidden sm:inline">{new Date().toLocaleTimeString()}</span>
+                          <span className="min-w-0 break-words">{log}</span>
                         </div>
                       ))}
                       {status === 'processing' && (
@@ -1536,21 +1713,26 @@ function App() {
               </div>
 
               {/* Right Panel: Results Grid */}
-              <div className={`${status === 'complete' ? 'w-full md:w-[70%] lg:w-[75%]' : 'w-full md:w-[45%] lg:w-[40%]'} md:h-full flex flex-col shrink-0 md:shrink card p-4 sm:p-6 transition-all duration-700 ease-in-out`}>
-                <h2 className="font-display lowercase text-xl text-ink mb-6 flex flex-wrap items-center gap-2 shrink-0">
-                  Generated Shorts
-                  {results?.clips?.length > 0 && (
-                    <span className="readout bg-paper3 px-2.5 py-1 rounded-full ml-auto">
-                      {results.clips.length} Clips
-                    </span>
-                  )}
-                  {results?.cost_analysis && !isManaged && (
-                    <span className="readout bg-paper3 px-2.5 py-1 rounded-full ml-2" title={`Input: ${results.cost_analysis.input_tokens} | Output: ${results.cost_analysis.output_tokens}`}>
-                      GEMINI · ${results.cost_analysis.total_cost.toFixed(5)}
-                    </span>
-                  )}
+              <div className={`${status === 'complete' ? 'w-full md:w-[70%] lg:w-[75%]' : 'w-full md:w-[45%] lg:w-[40%]'} md:h-full flex flex-col shrink-0 md:shrink card p-3.5 sm:p-6 transition-all duration-700 ease-in-out`}>
+                {/* Title + counters on one row, the two actions on their own row
+                    below. Wrapping them all together dropped a lone half-width
+                    "schedule week" pill under the title on a phone. */}
+                <div className="mb-4 sm:mb-6 shrink-0 space-y-3">
+                  <h2 className="font-display lowercase text-lg sm:text-xl text-ink flex flex-wrap items-center gap-2">
+                    <span className="mr-auto">Generated Shorts</span>
+                    {results?.clips?.length > 0 && (
+                      <span className="readout bg-paper3 px-2.5 py-1 rounded-full">
+                        {results.clips.length} Clips
+                      </span>
+                    )}
+                    {results?.cost_analysis && !isManaged && (
+                      <span className="readout bg-paper3 px-2.5 py-1 rounded-full" title={`Input: ${results.cost_analysis.input_tokens} | Output: ${results.cost_analysis.output_tokens}`}>
+                        GEMINI · ${results.cost_analysis.total_cost.toFixed(5)}
+                      </span>
+                    )}
+                  </h2>
                   {results?.clips?.length > 0 && status === 'complete' && (
-                    <div className="flex items-center gap-2 ml-auto">
+                    <div className="flex flex-col sm:flex-row sm:justify-end items-stretch sm:items-center gap-2">
                       <button
                         onClick={handleDownloadAll}
                         disabled={downloadingAll}
@@ -1572,7 +1754,7 @@ function App() {
                       )}
                     </div>
                   )}
-                </h2>
+                </div>
 
                 {status === 'complete' && results?.clips?.length > 0 && (
                   <div className="mb-2 space-y-2">
@@ -1592,14 +1774,29 @@ function App() {
                         publishing them is one connect away. Hidden once any
                         network is linked or the user dismisses it. */}
                     {showSocialNudge && (
-                      <div className="w-full flex items-center gap-3 px-3 py-2.5 rounded-input bg-paper3 border border-rule text-sm">
-                        <div className="flex-1 min-w-0">
-                          <span className="text-ink">Publish these clips straight from here.</span>{' '}
-                          <span className="text-muted">Connect your YouTube, TikTok or Instagram once — after that every clip is one click from posted.</span>
+                      <div className="w-full flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3 px-3 py-2.5 rounded-input bg-paper3 border border-rule text-sm">
+                        <div className="flex items-start gap-3 flex-1 min-w-0">
+                          <div className="min-w-0 leading-relaxed">
+                            <span className="text-ink">Publish these clips straight from here.</span>{' '}
+                            <span className="text-muted">Connect your YouTube, TikTok or Instagram once — after that every clip is one click from posted.</span>
+                          </div>
+                          {/* On a phone the dismiss X rides the copy, so the CTA
+                              below can run the full width of the card. */}
+                          <button
+                            onClick={() => {
+                              track('SocialNudgeDismissed');
+                              setSocialNudgeDismissed(true);
+                              try { localStorage.setItem('os_social_nudge_dismissed', '1'); } catch (_) { /* ignore */ }
+                            }}
+                            aria-label="dismiss"
+                            className="sm:hidden shrink-0 -m-1 p-1 text-muted hover:text-ink"
+                          >
+                            <X size={16} />
+                          </button>
                         </div>
                         <button
                           onClick={() => { track('SocialNudgeConnect'); handleConnectSocials(); }}
-                          className="btn-quiet shrink-0 text-xs py-1.5 px-3 lowercase"
+                          className="btn-quiet shrink-0 text-xs py-1.5 px-3 lowercase w-full sm:w-auto"
                         >
                           connect socials →
                         </button>
@@ -1610,7 +1807,7 @@ function App() {
                             try { localStorage.setItem('os_social_nudge_dismissed', '1'); } catch (_) { /* ignore */ }
                           }}
                           aria-label="dismiss"
-                          className="shrink-0 p-1 text-muted hover:text-ink"
+                          className="hidden sm:block shrink-0 p-1 text-muted hover:text-ink"
                         >
                           <X size={14} />
                         </button>
@@ -1658,12 +1855,15 @@ function App() {
                     </div>
                   ) : (
                     status === 'processing' ? (
-                      <div className="h-full flex flex-col items-center justify-center text-muted space-y-4">
-                        <Loader2 size={32} className="animate-spin text-brass" />
+                      <div className="h-full min-h-[140px] flex flex-col items-center justify-center text-muted space-y-3 text-center px-4">
+                        <Loader2 size={28} className="animate-spin text-brass" />
                         <p className="text-sm lowercase">Waiting for clips...</p>
+                        <p className="text-xs text-muted/80 max-w-[26ch] leading-snug">
+                          They appear here one by one as each finishes rendering.
+                        </p>
                       </div>
                     ) : status === 'error' ? (
-                      <div className="h-full flex flex-col items-center justify-center text-danger space-y-2">
+                      <div className="h-full min-h-[120px] flex flex-col items-center justify-center text-danger space-y-2">
                         <p>Generation failed.</p>
                       </div>
                     ) : null
@@ -1675,6 +1875,10 @@ function App() {
           )}
 
         </div>
+
+        {/* Phone navigation. A flex sibling of the scrolling pane, not a fixed
+            overlay, so content is never trapped behind it. */}
+        <MobileTabBar />
 
       </main>
 

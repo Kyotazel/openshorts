@@ -11,7 +11,7 @@ import WatermarkModal, { watermarkNoticeDismissed } from './WatermarkModal';
 import { useAuth } from '../contexts/AuthContext';
 import { renderInBrowser } from '../lib/renderInBrowser';
 
-const QUIET_BTN = 'group flex flex-col items-center justify-center gap-1 py-2 px-1 rounded-input border border-rule hover:bg-paper3 text-[11px] lowercase text-ink2 whitespace-nowrap transition-colors disabled:opacity-45 disabled:cursor-not-allowed';
+const QUIET_BTN = 'group flex flex-col items-center justify-center gap-1 py-2.5 sm:py-2 px-1 rounded-input border border-rule hover:bg-paper3 text-[11px] lowercase text-ink2 whitespace-nowrap transition-colors disabled:opacity-45 disabled:cursor-not-allowed';
 
 const PLATFORM_OPTIONS = [
     { value: 'tiktok', label: 'tiktok', icon: <Video size={16} /> },
@@ -726,7 +726,11 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
     return (
         <div className="card overflow-hidden flex flex-col md:flex-row group hover:border-rule2 transition-colors animate-fade md:min-h-[420px]" style={{ animationDelay: `${index * 0.1}s` }}>
             {/* Left: Video Preview — 9:16 column matching the fixed card height */}
-            <div className="w-full md:w-[236px] bg-black relative shrink-0 aspect-[9/16] md:aspect-auto group/video">
+            {/* A full-width 9:16 preview on a phone is ~640px tall on its own,
+                which pushed the title, captions and every action off-screen.
+                Capping the height and centring keeps the whole card scannable
+                without letterboxing the clip. */}
+            <div className="w-full max-w-[calc(64vh*0.5625)] md:max-w-none mx-auto md:mx-0 md:w-[236px] bg-black relative shrink-0 aspect-[9/16] md:aspect-auto group/video">
                 <video
                     ref={videoRef}
                     src={playbackUrl}
@@ -899,7 +903,7 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
 
                     <button
                         onClick={() => setShowModal(true)}
-                        className="btn-primary flex-col gap-1 py-2 px-1 text-[11px] rounded-input whitespace-nowrap"
+                        className="btn-primary flex-col gap-1 py-2.5 sm:py-2 px-1 text-[11px] leading-none rounded-input whitespace-nowrap"
                     >
                         <Share2 size={16} className="shrink-0" /> post
                     </button>

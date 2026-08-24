@@ -228,7 +228,7 @@ export default function MediaInput({ onProcess, isProcessing }) {
                                         }}
                                     />
                                     <span className="block font-mono text-sm leading-none">{f.label}</span>
-                                    <span className="block text-[10px] leading-tight text-center text-muted">{f.hint}</span>
+                                    <span className="block text-[11px] sm:text-[10px] leading-tight text-center text-muted">{f.hint}</span>
                                 </button>
                             );
                         })}
@@ -249,7 +249,9 @@ export default function MediaInput({ onProcess, isProcessing }) {
                         )}
                     </button>
                     {showAdvanced && (
-                        <div className="mt-3 grid grid-cols-3 gap-2 animate-fade">
+                        /* Stacked on a phone: three number fields side by side leaves
+                           ~100px each, which crushes both label and value. */
+                        <div className="mt-3 grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-2 animate-fade">
                             <div>
                                 <p className="eyebrow mb-1.5">clips to aim for</p>
                                 <input
@@ -280,17 +282,17 @@ export default function MediaInput({ onProcess, isProcessing }) {
                                     className="input-field"
                                 />
                             </div>
-                            <p className="col-span-3 text-[11px] leading-relaxed text-muted">
+                            <p className="col-span-1 sm:col-span-3 text-[11px] leading-relaxed text-muted">
                                 Targets, not guarantees: the AI returns fewer clips when the
                                 material doesn't hold them. Leave blank to let it decide.
                             </p>
-                            <div className="col-span-3 flex items-center justify-between gap-3 pt-1 border-t border-rule">
+                            <div className="col-span-1 sm:col-span-3 flex flex-wrap items-center justify-between gap-3 pt-3 sm:pt-1 border-t border-rule">
                                 <label className="flex items-center gap-2 text-xs text-ink2 cursor-pointer select-none">
                                     <input
                                         type="checkbox"
                                         checked={autoHook}
                                         onChange={(e) => setAutoHook(e.target.checked)}
-                                        className="accent-[var(--color-accent)] cursor-pointer"
+                                        className="w-4 h-4 shrink-0 accent-[var(--color-accent)] cursor-pointer"
                                     />
                                     auto hook titles on clips
                                 </label>
@@ -313,12 +315,12 @@ export default function MediaInput({ onProcess, isProcessing }) {
                     )}
                 </div>
 
-                <label className="flex items-start gap-2 mt-5 text-xs text-muted cursor-pointer select-none">
+                <label className="flex items-start gap-2.5 mt-5 text-left text-[13px] sm:text-xs leading-relaxed text-muted cursor-pointer select-none">
                     <input
                         type="checkbox"
                         checked={acknowledged}
                         onChange={(e) => setAcknowledged(e.target.checked)}
-                        className="mt-0.5 accent-[var(--color-accent)] cursor-pointer"
+                        className="mt-0.5 w-4 h-4 shrink-0 accent-[var(--color-accent)] cursor-pointer"
                     />
                     <span>
                         I confirm I own this content or have the rights to process it. I am responsible for any content I submit. See our <a href="/terms" target="_blank" rel="noopener noreferrer" className="text-ink2 underline underline-offset-2 hover:text-brass transition-colors" onClick={(e) => e.stopPropagation()}>Terms</a> and <a href="/privacy" target="_blank" rel="noopener noreferrer" className="text-ink2 underline underline-offset-2 hover:text-brass transition-colors" onClick={(e) => e.stopPropagation()}>Privacy Policy</a>.

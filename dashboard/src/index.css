@@ -6,10 +6,34 @@
 @tailwind utilities;
 
 @layer base {
+  html {
+    /* momentum scrolling inside the app's panes, and no rubber-band on the shell */
+    -webkit-text-size-adjust: 100%;
+  }
+
   body {
     @apply bg-paper text-ink2 antialiased;
     font-family: var(--font-body);
     font-variant-numeric: tabular-nums;
+    /* A single stray wide child (a log line, a long URL) used to make the whole
+       app pan sideways on a phone. Panes that really are wide scroll on their own. */
+    overflow-x: hidden;
+  }
+
+  /* Touch: iOS zooms the page whenever a focused field renders below 16px, and
+     it never zooms back out. Lift every text control to 16px on small screens —
+     Tailwind's text-sm/xs on inputs is what triggers it. */
+  @media (max-width: 639px) {
+    input:not([type='checkbox']):not([type='radio']):not([type='range']),
+    select,
+    textarea {
+      font-size: 16px;
+    }
+  }
+
+  /* Kill the 300ms tap flash on Android/iOS — it reads as lag on every button. */
+  button, a, [role='button'] {
+    -webkit-tap-highlight-color: transparent;
   }
 
   ::selection {
@@ -141,6 +165,34 @@
   /* narrow phones: tighter pill padding so CTA labels stay on one line */
   @media (max-width: 379px) {
     .btn-primary, .btn-ghost { padding-left: 1rem; padding-right: 1rem; }
+  }
+
+  /* Touch: 44px is the Apple/WCAG hit-target floor. The quiet/danger pills sit
+     at ~34px from their padding alone, which is a miss on a phone. Only the
+     shared pills are lifted — blanket-sizing every <button> would stretch the
+     icon rows inside the clip cards. */
+  @media (pointer: coarse) {
+    .btn-primary, .btn-ghost, .btn-quiet, .btn-danger { min-height: 44px; }
+  }
+
+  /* App shell helpers ------------------------------------------------------ */
+
+  /* Pads past the iOS home indicator (needs viewport-fit=cover in index.html).
+     A spacer rather than `padding-bottom`: Tailwind's utilities layer is emitted
+     after components, so a `py-4` on the same element would win outright and
+     silently drop the inset. This adds to whatever padding is already there. */
+  .safe-bottom::after {
+    content: '';
+    display: block;
+    width: 100%;
+    height: env(safe-area-inset-bottom, 0px);
+  }
+
+  /* Phone type: the muted grey reads fine at desktop distance but loses too
+     much on a small bright screen, and 10.5px mono labels turn to texture. */
+  @media (max-width: 639px) {
+    .readout { font-size: 11.5px; letter-spacing: 0.06em; }
+    .eyebrow { font-size: 11.5px; letter-spacing: 0.08em; opacity: 0.7; }
   }
 }
 

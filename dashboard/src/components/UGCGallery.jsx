@@ -59,7 +59,7 @@ export default function UGCGallery() {
       </div>
 
       {/* Tabs */}
-      <div className="max-w-xs">
+      <div className="max-w-xs w-full">
         <SegmentedControl
           size="sm"
           value={tab}
@@ -79,7 +79,7 @@ export default function UGCGallery() {
             <p className="text-sm text-muted lowercase">No videos yet. Generate one from AI Shorts.</p>
           </div>
         ) : (
-          <div className="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3">
+          <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3">
             {videos.map((video) => (
               <VideoCard key={video.video_id} video={video} copied={copied} onCopy={handleCopy} />
             ))}
@@ -95,7 +95,7 @@ export default function UGCGallery() {
             <p className="text-sm text-muted lowercase">No avatars yet. Generate actors from AI Shorts.</p>
           </div>
         ) : (
-          <div className="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-6 gap-3">
+          <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-3">
             {avatars.map((avatar, i) => (
               <AvatarCard key={avatar.key || i} avatar={avatar} copied={copied} onCopy={handleCopy} />
             ))}

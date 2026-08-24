@@ -51,11 +51,22 @@ export default {
       animation: {
         'pulse-slow': 'pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite',
         'fade': 'fadeIn 0.4s var(--ease-out)',
+        // mobile shell: the nav drawer flies in from the edge, sheets rise
+        'slide-in-left': 'slideInLeft 0.24s var(--ease-out)',
+        'sheet-up': 'sheetUp 0.26s var(--ease-out)',
       },
       keyframes: {
         fadeIn: {
           from: { opacity: '0' },
           to: { opacity: '1' },
+        },
+        slideInLeft: {
+          from: { transform: 'translateX(-100%)' },
+          to: { transform: 'translateX(0)' },
+        },
+        sheetUp: {
+          from: { transform: 'translateY(12px)', opacity: '0' },
+          to: { transform: 'translateY(0)', opacity: '1' },
         },
       },
     },
