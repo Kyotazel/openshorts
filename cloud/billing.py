@@ -282,7 +282,20 @@ async def _apply_topup(session_obj: dict):
             )).scalar_one_or_none()
             if existing:
                 return
+            # The id rides in Stripe's metadata, so it can name an account that
+            # no longer exists: a checkout completed moments before the user
+            # erased themselves, or any webhook Stripe retries afterwards.
+            # Inserting it blind trips the foreign key, and because the event is
+            # only recorded after handle_event returns, the 500 makes Stripe
+            # retry the same doomed insert for three days.
             user_id = (session_obj.get("metadata") or {}).get("user_id")
+            if user_id:
+                try:
+                    user_id = (await s.execute(
+                        select(User.id).where(User.id == user_id)
+                    )).scalar_one_or_none()
+                except Exception:
+                    user_id = None  # not a uuid at all
             if not user_id:
                 user_id = await _user_id_for_customer(s, session_obj.get("customer"))
             if not user_id:

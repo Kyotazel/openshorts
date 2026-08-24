@@ -22,8 +22,10 @@ happens when a step fails halfway:
 
 What deliberately survives: the Stripe customer and its invoices (six-year
 retention under Spanish commercial law, privacy policy §5) and one
-[AccountDeletion] row holding a sha256 of the email — proof the erasure
-happened, with no readable identity in it.
+[AccountDeletion] row proving the erasure happened — a sha256 of the email
+rather than the address, and no free text anywhere in it. The confirmation
+email tells the user both, because a record they were never told about is not
+accountability, it is retention.
 """
 import asyncio
 import hashlib
@@ -54,6 +56,17 @@ from .models import (
 USER_OWNED_TABLES = (
     ClipExpiryWarning, UserVideo, Project, UsageLedger, CreditTopup,
     Subscription, ApiKey, SignupAttribution, UploadPostProfile,
+)
+
+# The optional "why are you leaving" answer, as a closed list. It was a free
+# text box first, and that was wrong: whatever the user types lands in a record
+# that deliberately outlives their account, so a single "my name is X, please
+# confirm" turns the one row meant to hold no readable identity into retained
+# personal data. A fixed vocabulary cannot do that, and twenty deletions a month
+# are far more legible counted than read.
+DELETION_REASONS = (
+    "too_expensive", "not_using_it", "clip_quality", "missing_feature",
+    "found_alternative", "privacy", "other",
 )
 
 router = APIRouter()
@@ -141,6 +154,8 @@ async def _delete_upload_post_profile(user_id):
     import httpx
     from .social_profiles import API_BASE, _auth_headers
 
+    if not settings.managed_upload_post_key:
+        return
     async with database.session() as session:
         prof = await session.get(UploadPostProfile, user_id)
         if prof is None:
@@ -160,16 +175,31 @@ async def _delete_upload_post_profile(user_id):
         print(f"⚠️  Upload-Post profile delete failed for {username}: {e}")
 
 
-async def _erase_rows(user_id, email, stripe_customer_id, plan, r2_deleted, reason):
+async def _erase_rows(user_id, email, stripe_customer_id, plan, r2_deleted, reason) -> bool:
     """Swap the account for its erasure record, in one transaction.
 
     All-or-nothing on purpose: a half-erased account is worse than an un-erased
     one, because the user is told they are gone while some of their rows are
     not. Magic-link tokens are keyed by email rather than user id, so they need
     their own statement on top of [USER_OWNED_TABLES].
+
+    Returns whether this call is the one that removed the account. Two requests
+    can race here — a double-click, or two tabs — and everything before this
+    point is idempotent, but the erasure record is not: writing it from the
+    loser would leave two rows for one deletion, possibly disagreeing about the
+    reason. Postgres serialises the two DELETEs, so the loser sees rowcount 0
+    and writes nothing.
     """
     async with database.session() as session:
         async with session.begin():
+            for model in USER_OWNED_TABLES:
+                await session.execute(
+                    delete(model).where(model.user_id == user_id))
+            await session.execute(
+                delete(MagicLinkToken).where(MagicLinkToken.email == email))
+            result = await session.execute(delete(User).where(User.id == user_id))
+            if result.rowcount == 0:
+                return False
             session.add(AccountDeletion(
                 former_user_id=str(user_id),
                 email_sha256=email_fingerprint(email),
@@ -178,12 +208,7 @@ async def _erase_rows(user_id, email, stripe_customer_id, plan, r2_deleted, reas
                 r2_objects_deleted=r2_deleted,
                 reason=reason,
             ))
-            for model in USER_OWNED_TABLES:
-                await session.execute(
-                    delete(model).where(model.user_id == user_id))
-            await session.execute(
-                delete(MagicLinkToken).where(MagicLinkToken.email == email))
-            await session.execute(delete(User).where(User.id == user_id))
+    return True
 
 
 # --------------------------------------------------------------------------- #
@@ -194,7 +219,7 @@ class DeleteAccountRequest(BaseModel):
     # there is no password to re-enter, so this is the strongest thing we can
     # ask for without mailing a second token to a user who is leaving anyway.
     confirm_email: str
-    reason: Optional[str] = None
+    reason: Optional[str] = None   # one of DELETION_REASONS, or ignored
 
 
 @router.delete("/api/account")
@@ -211,10 +236,15 @@ async def delete_account(payload: DeleteAccountRequest, request: Request):
         if row is None:
             raise HTTPException(status_code=404, detail="Account not found.")
         email, stripe_customer_id = row.email, row.stripe_customer_id
-        # A reserved ledger row means a render is in flight. Erasing now would
-        # delete the output from under a job that is still writing it, and the
+        # A reserved ledger row means metered work is in flight. Erasing now
+        # would pull the output from under a job still writing it, and the
         # reservation would never settle. Minutes are refunded on failure, so
         # waiting costs the user nothing.
+        #
+        # This covers everything that costs minutes, which is everything long
+        # enough to matter. A free action (burning captions on an untranslated
+        # clip) writes no ledger row and so is not covered: worst case it fails
+        # on a missing file, in a tab whose session is about to end anyway.
         in_flight = (await session.execute(
             select(func.count(UsageLedger.id)).where(
                 UsageLedger.user_id == user.id, UsageLedger.status == "reserved")
@@ -249,15 +279,20 @@ async def delete_account(payload: DeleteAccountRequest, request: Request):
 
     if _local_purge is not None:
         try:
-            _local_purge(user.id)
+            # rmtree over gigabytes of video: off the event loop, or every other
+            # request on the process waits for this user's disk to clear.
+            await asyncio.to_thread(_local_purge, user.id)
         except Exception as e:
             print(f"⚠️  Local job purge failed for {user.id}: {e}")
 
     await _delete_upload_post_profile(user.id)
 
-    reason = (payload.reason or "").strip()[:500] or None
+    # Anything not in the closed list is dropped rather than rejected: a
+    # mismatched client must not be able to fail a deletion over a label.
+    reason = payload.reason if payload.reason in DELETION_REASONS else None
     try:
-        await _erase_rows(user.id, email, stripe_customer_id, plan, r2_deleted, reason)
+        erased = await _erase_rows(
+            user.id, email, stripe_customer_id, plan, r2_deleted, reason)
     except Exception as e:
         # The content is already gone; only the account row survived. Say that
         # rather than a bare 500 — the user needs to know a retry is safe and
@@ -268,6 +303,10 @@ async def delete_account(payload: DeleteAccountRequest, request: Request):
             "Please try again, or email info@openshorts.app."))
     # ``email`` was read before the delete on purpose: from here on the address
     # exists nowhere in our systems, and the goodbye email still has to go out.
+
+    if not erased:
+        # A concurrent request got there first and has already sent the email.
+        return {"deleted": True, "r2_objects_deleted": r2_deleted}
 
     print(f"🗑️  Account erased: {user.id} (plan={plan}, r2_objects={r2_deleted})")
 

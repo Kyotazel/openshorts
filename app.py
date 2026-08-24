@@ -1218,35 +1218,66 @@ async def _settle_reservation(job_id):
     except Exception as e:
         print(f"⚠️  Reservation settle error for {job_id}: {e}")
 
+def _owned_by(record, uid: str) -> bool:
+    owner = record.get('user_id') if isinstance(record, dict) else None
+    return owner is not None and str(owner) == uid
+
+
+def _rm_under(base_dir: str, relative: str):
+    """Remove a file or directory, refusing anything that escapes ``base_dir``."""
+    target = _safe_under(base_dir, relative)
+    if not target or target == os.path.realpath(base_dir):
+        return
+    if os.path.isdir(target):
+        shutil.rmtree(target, ignore_errors=True)
+    else:
+        try:
+            os.remove(target)
+        except OSError:
+            pass
+
+
 def _purge_local_jobs_for_user(user_id) -> int:
-    """Delete this user's job dirs, source uploads and in-memory job records.
+    """Delete this user's working files and in-memory records from local disk.
 
     Called by cloud/account.py when an account is erased. The durable copies
     live on R2 and are deleted there; these are the working files on the API's
     own disk, which would otherwise sit around until the one-hour cleanup sweep
-    — a long time to keep the videos of someone who just asked to be forgotten.
+    — and thumbnails not even then, because that sweep skips their directory.
 
-    Ownership comes from the ``.owner`` file each managed job writes, so jobs
-    recovered from disk after a restart (no in-memory record) are covered too.
+    Three stores, because each records ownership differently:
+      - clip jobs: the ``.owner`` file every managed job writes, so jobs
+        recovered from disk after a restart (no in-memory record) count too;
+      - SaaSShorts jobs (``output/saas_<id>``): ``saas_jobs`` only, no marker
+        file, so a restart loses the link and those age out on the sweep;
+      - thumbnail sessions (``output/thumbnails/<id>`` plus the source video in
+        ``uploads/``): likewise in-memory only.
+
+    Blocking: rmtree over gigabytes of video. Callers must run it in a thread.
     """
     uid = str(user_id)
-    job_ids = {jid for jid, job in list(jobs.items())
-               if job.get('user_id') is not None and str(job['user_id']) == uid}
+    removed = 0
+
+    job_ids = {jid for jid, job in list(jobs.items()) if _owned_by(job, uid)}
+    thumbs_dir_name = os.path.basename(THUMBNAILS_DIR)
     try:
         entries = os.listdir(OUTPUT_DIR)
     except OSError:
         entries = []
     for job_id in entries:
-        owner_path = os.path.join(OUTPUT_DIR, job_id, ".owner")
+        # Never a job, and it backs a StaticFiles mount: deleting the directory
+        # itself 500s every /thumbnails request until the process restarts.
+        if job_id == thumbs_dir_name:
+            continue
         try:
-            with open(owner_path) as f:
+            with open(os.path.join(OUTPUT_DIR, job_id, ".owner")) as f:
                 if f.read().strip() == uid:
                     job_ids.add(job_id)
         except OSError:
             continue
 
     for job_id in job_ids:
-        shutil.rmtree(os.path.join(OUTPUT_DIR, job_id), ignore_errors=True)
+        _rm_under(OUTPUT_DIR, job_id)
         jobs.pop(job_id, None)
         # Source uploads are named "<job_id>_<filename>" (see /api/process).
         for path in glob.glob(os.path.join(UPLOAD_DIR, f"{glob.escape(job_id)}_*")):
@@ -1254,9 +1285,32 @@ def _purge_local_jobs_for_user(user_id) -> int:
                 os.remove(path)
             except OSError:
                 pass
-    if job_ids:
-        print(f"🗑️  Purged {len(job_ids)} local job dir(s) for erased user {uid}.")
-    return len(job_ids)
+        removed += 1
+
+    for jid, job in list(saas_jobs.items()):
+        if not _owned_by(job, uid):
+            continue
+        out = job.get('output_dir')
+        if out:
+            _rm_under(OUTPUT_DIR, os.path.basename(out))
+        saas_jobs.pop(jid, None)
+        removed += 1
+
+    for sid, sess in list(thumbnail_sessions.items()):
+        if not _owned_by(sess, uid):
+            continue
+        # Generated thumbnails are served publicly at /thumbnails/<id>/... and
+        # nothing else ever deletes them.
+        _rm_under(THUMBNAILS_DIR, sid)
+        video_path = sess.get('video_path')
+        if video_path:
+            _rm_under(UPLOAD_DIR, os.path.basename(video_path))
+        thumbnail_sessions.pop(sid, None)
+        removed += 1
+
+    if removed:
+        print(f"🗑️  Purged {removed} local work item(s) for erased user {uid}.")
+    return removed
 
 
 @asynccontextmanager

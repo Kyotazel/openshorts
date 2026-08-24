@@ -228,9 +228,13 @@ class AccountDeletion(Base):
 
     GDPR Art. 17 erasure has an accountability twin (Art. 5.2): if a former user
     later claims we never deleted their account, the only way to answer is a
-    record that outlives the deletion. So this holds no readable identity — a
-    sha256 of the account email, which can confirm "yes, this address was
-    deleted on this date" without storing the address itself.
+    record that outlives the deletion. The identifying field is therefore a
+    sha256 of the account email, which confirms "yes, this address was deleted
+    on this date" without storing the address itself.
+
+    ``reason`` is one label from ``account.DELETION_REASONS``, never free text:
+    anything the user could type would land in a row that deliberately outlives
+    their account, which is the opposite of what this row is for.
 
     ``stripe_customer_id`` is the one exception and it is deliberate: the
     invoices behind it must be kept for six years under Spanish commercial law,
@@ -249,5 +253,5 @@ class AccountDeletion(Base):
     stripe_customer_id = Column(Text, nullable=True)
     plan_at_deletion = Column(String(20), nullable=True)
     r2_objects_deleted = Column(Integer, nullable=True)
-    reason = Column(Text, nullable=True)                 # optional free-text the user typed
+    reason = Column(String(32), nullable=True)           # one of account.DELETION_REASONS
     deleted_at = Column(DateTime(timezone=True), server_default=func.now())

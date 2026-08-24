@@ -156,9 +156,11 @@ async def send_account_deleted_email(email: str):
         <p>Two things we keep, and why:</p>
         <ul style="line-height:1.7;padding-left:20px">
           <li><strong>Your invoices</strong>, for six years &mdash; Spanish
-              commercial law requires it.</li>
-          <li><strong>A record that this deletion happened</strong>, holding a
-              one-way hash of your email address and nothing else.</li>
+              commercial law requires it, and the Stripe customer reference
+              that finds them goes with it.</li>
+          <li><strong>A record that this deletion happened</strong>, for five
+              years, holding a one-way hash of your email address instead of
+              the address itself.</li>
         </ul>
         <p>You can sign up again any time with the same address; it will be a
            brand-new, empty account.</p>

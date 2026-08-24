@@ -217,11 +217,22 @@ added after a table shipped exists in the models but not in production.
 `tests/test_account_erasure.py` fails if a new table references `users.id`
 without joining that list.
 
+`app.py` registers a callback for the local working files, which record
+ownership three different ways: the `.owner` file clip jobs write (so jobs
+recovered from disk after a restart count too), `saas_jobs`, and
+`thumbnail_sessions`. That last one is the only thing that ever deletes
+generated thumbnails: the hourly sweep skips their directory and they are
+served publicly at `/thumbnails/`.
+
 What deliberately survives: the Stripe customer and its invoices (6-year
 retention, Spanish commercial law) and one `account_deletions` row holding a
 sha256 of the email as proof the erasure happened, itself purged after 5 years.
-`app.py` registers a callback so the local `output/` and `uploads/` working
-files go too, instead of waiting for the hourly sweep.
+The "why are you leaving" answer is a closed list (`DELETION_REASONS`), never
+free text — anything the user could type would land in a row designed to
+outlive them. Deleting users also made one webhook path reachable that never
+was before: `_apply_topup` reads the user id from Stripe metadata, so it now
+confirms the row still exists before inserting, or the FK violation makes
+Stripe retry the same doomed event for three days.
 
 ### Concurrency Model
 Async job queue with semaphore-based concurrency control. Configure via `MAX_CONCURRENT_JOBS` env var (default: 5). Jobs auto-cleanup after 1 hour.

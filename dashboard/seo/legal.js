@@ -613,7 +613,8 @@ Delete account</strong> in the dashboard does it yourself, immediately and
 permanently, taking your projects, clips, transcripts, API keys and social
 connections with it and cancelling any active subscription. Two things survive
 it, both listed in section 5: your invoices, which tax law requires us to keep,
-and a one-way hash of your email address recording that the deletion happened.
+and a record that the deletion happened, which identifies you by a one-way hash
+of your email address rather than by the address itself.
 If you believe we are mishandling your data, you can complain to the Spanish
 supervisory authority (AEPD, aepd.es) or to the authority of your own EU
 country.</p>
@@ -750,8 +751,9 @@ forma inmediata y permanente, y se lleva por delante tus proyectos, clips,
 transcripciones, claves de API y conexiones con redes sociales, además de
 cancelar cualquier suscripción activa. Solo sobreviven dos cosas, ambas
 recogidas en el apartado 5: tus facturas, que la normativa fiscal nos obliga a
-conservar, y un hash irreversible de tu dirección de email que acredita que la
-eliminación se produjo. Si crees que tratamos mal tus datos, puedes reclamar
+conservar, y un registro de que la eliminación se produjo, que te identifica
+mediante un hash irreversible de tu dirección de email y no mediante la
+dirección en sí. Si crees que tratamos mal tus datos, puedes reclamar
 ante la Agencia Española de Protección de Datos (AEPD, aepd.es) o ante la
 autoridad de tu país de la UE.</p>
 

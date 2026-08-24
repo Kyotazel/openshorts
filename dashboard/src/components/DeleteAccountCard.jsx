@@ -1,7 +1,20 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useRef, useCallback } from 'react';
 import { Trash2, AlertTriangle, Loader2 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { apiJson } from '../lib/api';
+
+// Mirrors cloud/account.DELETION_REASONS. A closed list rather than a text
+// box, because the answer is stored in a record that outlives the account and
+// free text is how personal data gets into one by accident.
+const REASONS = [
+  ['too_expensive', 'Too expensive'],
+  ['not_using_it', "I'm not using it"],
+  ['clip_quality', "The clips weren't good enough"],
+  ['missing_feature', 'Missing a feature I need'],
+  ['found_alternative', 'I found something better'],
+  ['privacy', 'Privacy concerns'],
+  ['other', 'Something else'],
+];
 
 // GDPR Art. 17 erasure, self-service (backend: cloud/account.py). The privacy
 // policy tells users they can delete their account from the dashboard, so this
@@ -16,18 +29,26 @@ export default function DeleteAccountCard() {
   const [reason, setReason] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  // setBusy only disables the button on the next render, which a fast double
+  // click beats. The server survives a duplicate call, but each one re-runs a
+  // Stripe cancel and an R2 prefix delete for nothing.
+  const sending = useRef(false);
 
   const email = me?.user?.email || '';
-  const matches = confirm.trim().toLowerCase() === email.toLowerCase();
+  // `!!email` matters: without it an account page rendered before /api/me
+  // resolves would treat an empty box as a match and arm the delete button.
+  const matches = !!email && confirm.trim().toLowerCase() === email.toLowerCase();
 
   const remove = useCallback(async () => {
+    if (sending.current) return;
+    sending.current = true;
     setBusy(true);
     setError('');
     try {
       await apiJson('/api/account', {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ confirm_email: confirm.trim(), reason: reason.trim() || undefined }),
+        body: JSON.stringify({ confirm_email: confirm.trim(), reason: reason || undefined }),
       });
       // The session token now points at nothing. Drop it before navigating, or
       // the landing page spends a request discovering that for itself. The
@@ -42,6 +63,7 @@ export default function DeleteAccountCard() {
       window.location.reload();
     } catch (e) {
       setError(e?.detail || 'Could not delete your account. Please try again or email info@openshorts.app.');
+      sending.current = false;
       setBusy(false);
     }
   }, [confirm, reason, logout]);
@@ -77,19 +99,23 @@ export default function DeleteAccountCard() {
             <p className="mt-2">
               Any active subscription is cancelled as part of this. We keep your
               invoices for six years because Spanish law requires it, plus a
-              one-way hash of your email as proof the deletion happened.
+              one-way hash of your email address, instead of the address, as
+              proof the deletion happened.
             </p>
           </div>
 
           <label className="block">
             <span className="text-sm text-muted lowercase">Why are you leaving? (optional)</span>
-            <input
+            <select
               value={reason}
               onChange={(e) => setReason(e.target.value)}
-              placeholder="It helps us fix what went wrong"
               className="input-field w-full text-sm mt-1"
-              maxLength={500}
-            />
+            >
+              <option value="">Prefer not to say</option>
+              {REASONS.map(([value, label]) => (
+                <option key={value} value={value}>{label}</option>
+              ))}
+            </select>
           </label>
 
           <label className="block">
