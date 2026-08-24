@@ -170,7 +170,7 @@ class TestStripeCancel:
         cancellation made in the portal whose webhook never landed. If that
         raised, the one account impossible to delete would be the one Stripe
         already stopped charging."""
-        import stripe
+        stripe = pytest.importorskip("stripe")  # not in the minimal CI deps
 
         class _Row:
             stripe_subscription_id = "sub_gone"
