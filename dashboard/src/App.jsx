@@ -1657,6 +1657,19 @@ function App() {
                   />
                 )}
 
+                {/* Phones only. The scan box drops its invented telemetry at
+                    this size and the log terminal below starts collapsed, so
+                    without this the screen would say nothing about what the job
+                    is actually doing. The log tail is the real answer. */}
+                {status === 'processing' && (
+                  <div className="sm:hidden mb-3 flex items-start gap-2 text-xs text-ink2 min-w-0">
+                    <Loader2 size={14} className="animate-spin text-brass shrink-0 mt-px" />
+                    <span className="min-w-0 leading-snug break-words">
+                      {logs.length ? logs[logs.length - 1] : 'starting up…'}
+                    </span>
+                  </div>
+                )}
+
                 {/* The render is dead time: the user is watching a progress bar
                     with nothing to do, so this is where the one star ask goes. */}
                 {status === 'processing' && (
@@ -1842,12 +1855,15 @@ function App() {
                     </div>
                   ) : (
                     status === 'processing' ? (
-                      <div className="h-full flex flex-col items-center justify-center text-muted space-y-4">
-                        <Loader2 size={32} className="animate-spin text-brass" />
+                      <div className="h-full min-h-[140px] flex flex-col items-center justify-center text-muted space-y-3 text-center px-4">
+                        <Loader2 size={28} className="animate-spin text-brass" />
                         <p className="text-sm lowercase">Waiting for clips...</p>
+                        <p className="text-xs text-muted/80 max-w-[26ch] leading-snug">
+                          They appear here one by one as each finishes rendering.
+                        </p>
                       </div>
                     ) : status === 'error' ? (
-                      <div className="h-full flex flex-col items-center justify-center text-danger space-y-2">
+                      <div className="h-full min-h-[120px] flex flex-col items-center justify-center text-danger space-y-2">
                         <p>Generation failed.</p>
                       </div>
                     ) : null
