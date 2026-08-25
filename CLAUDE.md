@@ -237,36 +237,25 @@ Stripe retry the same doomed event for three days.
 ### Concurrency Model
 Async job queue with semaphore-based concurrency control. Configure via `MAX_CONCURRENT_JOBS` env var (default: 5). Jobs auto-cleanup after 1 hour.
 
-### Deploys interrupt running jobs
+### Deploys and running jobs (handover + drain)
 
-Every push to `main` redeploys the API container and Coolify does not wait for
-the queue to drain. An interrupted job is re-enqueued on startup from its
-`.resume.json` manifest (`app.py:_resume_interrupted_jobs`, max 2 attempts) and
-re-runs with the same command and output directory. `main.py` leaves the
-finished transcript in that directory (`.transcript_checkpoint.json`) so the
-re-run skips the slow, paid transcription; the download and the
-Gemini analysis still repeat. Before pushing: batch small commits (tests, docs)
-with the next real change instead of giving them their own deploy, and check
-that no job is mid-flight in the prod container.
+Every push to `main` redeploys the API container. Coolify starts the NEW
+container before stopping the old one (rolling update) and both share
+`output/`, so `app.py` coordinates them instead of relying on a fast swap:
 
-## Environment Variables
+- Each instance writes its id to `output/.instance` at startup. An instance
+  that sees another id there is the old one and **drains**: it finishes the
+  jobs it is running, starts none, and leaves queued manifests on disk.
+- A running job heartbeats its `.resume.json` every 10 s. The resume scan
+  (startup + every 30 s) re-enqueues only manifests nobody heartbeated for
+  60 s, so no job runs twice and none is lost. Max 2 resume attempts.
+- SIGTERM (`docker stop`) drains too, up to `DRAIN_TIMEOUT_SECONDS` (840),
+  then hands the signal to uvicorn. The app's Coolify stop grace period is
+  900 s (`application_settings.stop_grace_period`); keep the timeout below it.
+- `/api/status` answers from disk for a job this instance never held, so a
+  poll landing on either container during the handover is fine.
+- `main.py` leaves `.transcript_checkpoint.json` in the job dir so a job that
+  does get re-run skips the paid transcription (download and Gemini repeat).
 
-**Server-side (.env):**
-- `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`, `AWS_S3_BUCKET` - For S3 backup
-- `MAX_CONCURRENT_JOBS` - Concurrent processing limit (default: 5)
-- `VITE_API_URL` - Production API URL override
-- `VITE_OPENPANEL_API_URL`, `VITE_OPENPANEL_CLIENT_ID` - Optional product analytics, read at **build** time. Unset (the default, including every self-hosted build) means no analytics is initialised and no third-party script is loaded. `dashboard/index.html` also gates reporting on an `ANALYTICS_HOSTS` allowlist, so a build carrying credentials stays inert on any other host.
-- `OPENPANEL_CLIENT_ID`, `OPENPANEL_CLIENT_SECRET` - Optional **server-side** analytics (`cloud/analytics.py`), same opt-in rule: unset means a silent no-op. Reports job outcomes with the user's job index, which the browser cannot do reliably — a render finishes after the tab is often gone, and ad-blockers eat a share of client events. Needs a *write* client; the read client used for querying is a different credential.
-
-**Client-side (localStorage, encrypted):**
-- `GEMINI_API_KEY` - Google Gemini API key (required)
-- `ELEVENLABS_API_KEY` - ElevenLabs API key for voice dubbing (optional)
-- `UPLOAD_POST_API_KEY` - Upload-Post API key for social posting (optional)
-
-> API keys are stored encrypted in the browser and sent via headers only when needed. Never stored server-side.
-
-## Tech Stack
-- **Backend:** Python 3.11, FastAPI, google-genai, faster-whisper, ultralytics (YOLOv8), mediapipe, opencv-python, yt-dlp, FFmpeg, httpx
-- **Frontend:** React 18, Vite 4, Tailwind CSS 3.4
-- **External APIs:** Google Gemini, ElevenLabs Dubbing, Upload-Post
-- **Infrastructure:** Docker + Docker Compose, AWS S3
+Before pushing, still batch small commits (tests, docs) with the next real
+change: every deploy is a ~5 min build plus a handover.

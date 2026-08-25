@@ -12,6 +12,8 @@ import zipfile
 import math
 import itertools
 import asyncio
+import signal
+import socket
 from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
 from typing import Any, Dict, Optional, List
@@ -589,6 +591,155 @@ def _recover_jobs_from_disk():
 _RESUME_FILE = ".resume.json"
 MAX_RESUME_ATTEMPTS = 2
 
+# --- Deploy handover (two instances, one disk) -------------------------------
+# Coolify starts the NEW container before it stops the old one (rolling
+# update), and both see the same OUTPUT_DIR. Without coordination the new one
+# re-enqueued, at startup, the very jobs the old one was still rendering —
+# and the old one had 30 s to live anyway. Now:
+#   * every instance stamps OUTPUT_DIR/.instance with its id at startup; an
+#     instance that sees another id there knows it is the OLD one and DRAINS:
+#     it finishes what it is running, starts nothing new, and leaves queued
+#     manifests for the new instance to pick up;
+#   * a running job writes a heartbeat into its manifest every few seconds,
+#     so the new instance skips manifests that are alive elsewhere and resumes
+#     only the stale ones (an instance killed mid-job stops heartbeating);
+#   * SIGTERM (docker stop) also drains, up to DRAIN_TIMEOUT_SECONDS — keep it
+#     under the Coolify stop grace period — before letting uvicorn exit.
+INSTANCE_ID = os.environ.get("INSTANCE_ID") or socket.gethostname()
+_INSTANCE_MARKER = ".instance"
+HEARTBEAT_EVERY = 10                 # seconds between manifest heartbeats
+HEARTBEAT_STALE_AFTER = 60           # no heartbeat for this long = nobody has it
+RESUME_SCAN_INTERVAL = 30            # seconds between looks for stale manifests
+HANDOVER_CHECK_INTERVAL = 5          # seconds between looks at the marker
+DRAIN_TIMEOUT_SECONDS = int(os.environ.get("DRAIN_TIMEOUT_SECONDS", "840"))
+_draining = False
+_running_jobs: set = set()           # job ids with a live subprocess here
+
+
+def _manifest_path(job_id):
+    return os.path.join(OUTPUT_DIR, job_id, _RESUME_FILE)
+
+
+def _read_manifest(job_id):
+    try:
+        with open(_manifest_path(job_id)) as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return None
+    except Exception as e:
+        print(f"⚠️ Bad resume manifest for {job_id}: {e}")
+        return None
+
+
+def _touch_manifest(job_id, now=None):
+    """Stamp 'this instance is running it, as of now' into the manifest."""
+    m = _read_manifest(job_id)
+    if m is None:
+        return
+    m["heartbeat"] = now if now is not None else time.time()
+    m["instance"] = INSTANCE_ID
+    try:
+        with open(_manifest_path(job_id), "w") as f:
+            json.dump(m, f)
+    except Exception as e:
+        print(f"⚠️ Could not heartbeat manifest for {job_id}: {e}")
+
+
+def _manifest_busy_elsewhere(m, now=None):
+    """True when ANOTHER instance heartbeated this job recently. Our own id
+    with a fresh heartbeat is a job WE were running before a restart of this
+    same container (same hostname) — that one must be resumed, not skipped."""
+    now = time.time() if now is None else now
+    return (m.get("instance") not in (None, INSTANCE_ID)
+            and now - float(m.get("heartbeat") or 0) < HEARTBEAT_STALE_AFTER)
+
+
+def _write_instance_marker():
+    try:
+        os.makedirs(OUTPUT_DIR, exist_ok=True)
+        with open(os.path.join(OUTPUT_DIR, _INSTANCE_MARKER), "w") as f:
+            f.write(INSTANCE_ID)
+    except Exception as e:
+        print(f"⚠️ Could not write instance marker: {e}")
+
+
+def _read_instance_marker():
+    try:
+        with open(os.path.join(OUTPUT_DIR, _INSTANCE_MARKER)) as f:
+            return f.read().strip()
+    except Exception:
+        return None
+
+
+def _begin_drain(reason):
+    global _draining
+    if not _draining:
+        _draining = True
+        print(f"⏸️ Draining ({reason}): finishing {len(_running_jobs)} running job(s), "
+              f"starting none.")
+
+
+def _check_instance_marker():
+    """A different id in the marker means a newer instance is up: drain."""
+    other = _read_instance_marker()
+    if other and other != INSTANCE_ID:
+        _begin_drain(f"newer instance {other} is up")
+        return True
+    return False
+
+
+async def _handover_watch():
+    while not _draining:
+        await asyncio.sleep(HANDOVER_CHECK_INTERVAL)
+        _check_instance_marker()
+
+
+async def _resume_scan():
+    """Keep looking for manifests nobody is running (the old instance left
+    them queued, or was killed at the end of its grace period)."""
+    while True:
+        await asyncio.sleep(RESUME_SCAN_INTERVAL)
+        if _draining:
+            continue
+        try:
+            _resume_interrupted_jobs()
+        except Exception as e:
+            print(f"⚠️ Resume scan failed: {e}")
+
+
+async def _drain_then_exit(previous_handler, timeout=None):
+    """Wait for running jobs (bounded), then hand the signal to uvicorn."""
+    timeout = DRAIN_TIMEOUT_SECONDS if timeout is None else timeout
+    deadline = time.time() + timeout
+    while _running_jobs and time.time() < deadline:
+        await asyncio.sleep(1)
+    if _running_jobs:
+        print(f"⏱️ Drain timeout after {timeout}s with {len(_running_jobs)} job(s) still "
+              f"running — they will resume on the next instance.")
+    else:
+        print("✅ Drained: no running jobs, shutting down.")
+    if callable(previous_handler):
+        previous_handler(signal.SIGTERM, None)
+    else:
+        os._exit(0)
+
+
+def _install_drain_signal_handler():
+    """Replace uvicorn's SIGTERM handler with drain-first. uvicorn's own
+    handler closes the listening socket at once, which would make Traefik
+    send half the traffic to a refused port for the whole drain."""
+    previous = signal.getsignal(signal.SIGTERM)
+    loop = asyncio.get_running_loop()
+
+    def on_sigterm():
+        _begin_drain("SIGTERM")
+        asyncio.ensure_future(_drain_then_exit(previous))
+
+    try:
+        loop.add_signal_handler(signal.SIGTERM, on_sigterm)
+    except (NotImplementedError, RuntimeError, ValueError) as e:
+        print(f"⚠️ Drain-on-SIGTERM unavailable ({e}); jobs will resume on restart instead.")
+
 
 def _write_resume_manifest(job_id, cmd, priority, user_id, reservation_id, watermark,
                            webhook_url=None, webhook_secret=None, base_url=None):
@@ -629,13 +780,16 @@ def _resume_interrupted_jobs() -> set:
 
     Runs after _recover_jobs_from_disk: a job whose clips already finished has a
     metadata JSON and is recovered as 'completed', so we only resume manifests
-    with no metadata yet (analysis never finished).
+    with no metadata yet (analysis never finished). Also called periodically
+    (_resume_scan): a manifest another instance is heartbeating is left alone
+    until that heartbeat goes stale, and a job this instance already holds is
+    never enqueued twice.
 
-    Returns the set of reservation ids for the resumed jobs, so the caller can
-    keep them out of the orphaned-reservation refund. Does NO DB work — the DB
-    engine isn't up yet at this point in startup. A poison job (too many
-    attempts) is simply not resumed; its reservation is then refunded as a
-    normal orphan.
+    Returns the set of reservation ids for every manifest still on disk —
+    resumed here or alive on the other instance — so the caller can keep them
+    out of the orphaned-reservation refund. Does NO DB work — the DB engine
+    isn't up yet at this point in startup. A poison job (too many attempts) is
+    simply not resumed; its reservation is then refunded as a normal orphan.
     """
     keep_reservations: set = set()
     try:
@@ -648,8 +802,8 @@ def _resume_interrupted_jobs() -> set:
         manifest_path = os.path.join(job_path, _RESUME_FILE)
         if not os.path.isfile(manifest_path):
             continue
-        # Already finished generating clips → recovered as completed elsewhere.
         if glob.glob(os.path.join(job_path, "*_metadata.json")):
+            # Finished after all — recovered as completed already.
             _clear_resume_manifest(job_id)
             continue
         try:
@@ -659,6 +813,13 @@ def _resume_interrupted_jobs() -> set:
             print(f"⚠️ Bad resume manifest for {job_id}: {e}")
             continue
 
+        if m.get("reservation_id"):
+            keep_reservations.add(str(m["reservation_id"]))
+        if job_id in jobs:
+            continue  # already ours (queued, running or recovered)
+        if _manifest_busy_elsewhere(m):
+            continue  # the other instance is on it; we take over if it goes stale
+
         attempts = int(m.get("attempts", 0)) + 1
         user_id = m.get("user_id")
         reservation_id = m.get("reservation_id")
@@ -667,6 +828,8 @@ def _resume_interrupted_jobs() -> set:
             # set lets the orphan sweep refund it, and the user can retry by hand.
             print(f"🛑 Job {job_id} exceeded {MAX_RESUME_ATTEMPTS} resume attempts — giving up.")
             _clear_resume_manifest(job_id)
+            if reservation_id:
+                keep_reservations.discard(str(reservation_id))  # let the sweep refund it
             continue
 
         # Rebuild env from scratch — the manifest holds no secrets. Managed
@@ -702,8 +865,6 @@ def _resume_interrupted_jobs() -> set:
             'webhook_secret': m.get("webhook_secret"),
             'base_url': m.get("base_url"),
         }
-        if reservation_id:
-            keep_reservations.add(str(reservation_id))
         _enqueue_job(job_id, int(m.get("priority", 2)))
         resumed += 1
     if resumed:
@@ -851,9 +1012,22 @@ async def process_queue():
             # Wait for a job (priority, seq, job_id) — lowest priority first.
             _priority, _seq, job_id = await job_queue.get()
 
+            if _draining:
+                # Leave it on disk for the next instance (manifest, no heartbeat).
+                print(f"⏸️ Draining — leaving {job_id} for the next instance.")
+                job_queue.task_done()
+                continue
+
             # Acquire semaphore slot (waits if max jobs are running)
             await concurrency_semaphore.acquire()
+            if _draining:
+                concurrency_semaphore.release()
+                job_queue.task_done()
+                print(f"⏸️ Draining — leaving {job_id} for the next instance.")
+                continue
             print(f"🔄 Acquired slot for job: {job_id}")
+            _running_jobs.add(job_id)
+            _touch_manifest(job_id)
 
             # Process in background task to not block the loop (allowing other slots to fill)
             asyncio.create_task(run_job_wrapper(job_id))
@@ -918,6 +1092,7 @@ async def run_job_wrapper(job_id):
         # Telegram pulse for high-signal activity (first clip / paid user).
         await _notify_clip_activity(job_id)
         # Always release semaphore and mark queue task done
+        _running_jobs.discard(job_id)
         concurrency_semaphore.release()
         job_queue.task_done()
         print(f"✅ Released slot for job: {job_id}")
@@ -1320,6 +1495,13 @@ async def lifespan(app: FastAPI):
     # Re-enqueue jobs that were mid-processing when we stopped (redeploy). Their
     # reservations must survive the orphan sweep so the resumed run can settle them.
     _resumed_reservation_ids = _resume_interrupted_jobs()
+    # Deploy handover: claim the marker (any older instance sees it and drains),
+    # keep watching it in case a newer one appears, keep looking for manifests
+    # left behind, and drain instead of dying on docker stop.
+    _write_instance_marker()
+    _install_drain_signal_handler()
+    asyncio.create_task(_handover_watch())
+    asyncio.create_task(_resume_scan())
     # Start worker and cleanup
     worker_task = asyncio.create_task(process_queue())
     cleanup_task = asyncio.create_task(cleanup_jobs())
@@ -1488,8 +1670,12 @@ async def run_job(job_id, job_data):
         
         # Async wait for process with incremental updates
         start_wait = time.time()
+        last_heartbeat = time.time()
         while process.poll() is None:
             await asyncio.sleep(2)
+            if time.time() - last_heartbeat >= HEARTBEAT_EVERY:
+                _touch_manifest(job_id)
+                last_heartbeat = time.time()
             
             # Check for partial results every 2 seconds
             # Look for metadata file
@@ -1983,15 +2169,54 @@ async def process_endpoint(
 
     return {"job_id": job_id, "status": "queued"}
 
+def _job_view_from_disk(job_id):
+    """What the disk says about a job this instance does not hold in memory.
+
+    During a deploy handover a poll can land on either instance; the one that
+    did not accept the job must still answer from the shared directory: a
+    metadata JSON means completed (recovered like at startup), a manifest
+    means the other instance has it (heartbeat) or will pick it up (queued).
+    """
+    job_path = os.path.join(OUTPUT_DIR, job_id)
+    if not os.path.isdir(job_path):
+        return None
+    if glob.glob(os.path.join(job_path, "*_metadata.json")):
+        _recover_jobs_from_disk()
+        return jobs.get(job_id)
+    m = _read_manifest(job_id)
+    if m is None:
+        return None
+    alive = time.time() - float(m.get("heartbeat") or 0) < HEARTBEAT_STALE_AFTER
+    owner = m.get("user_id")
+    return {
+        'status': 'processing' if alive else 'queued',
+        'logs': ["♻️ The server was updated; your video continues on the new instance."],
+        'user_id': (int(owner) if isinstance(owner, str) and owner.isdigit() else owner),
+        'result': None,
+    }
+
+
+def _presented_status(job_id, job):
+    """A job we hold as 'queued' while draining is really the next instance's:
+    if it has started it, say so instead of showing a queue that never moves."""
+    if job.get('status') == 'queued' and _draining:
+        m = _read_manifest(job_id)
+        if m and _manifest_busy_elsewhere(m):
+            return 'processing'
+    return job['status']
+
+
 @app.get("/api/status/{job_id}")
 async def get_status(job_id: str, request: Request):
-    if job_id not in jobs:
+    job = jobs.get(job_id)
+    if job is None:
+        job = _job_view_from_disk(job_id)
+    if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
 
-    job = jobs[job_id]
     await _assert_job_owner(request, job)
     return {
-        "status": job['status'],
+        "status": _presented_status(job_id, job),
         "logs": _visible_logs(job['logs']),
         "result": job.get('result')
     }
