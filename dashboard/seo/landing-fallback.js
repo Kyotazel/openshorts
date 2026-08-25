@@ -37,7 +37,7 @@ const S = {
 }
 
 const FEATURES = [
-  ['AI viral moment detection', 'Google Gemini 3.0 Flash scores the transcript and scene data to find the 3 to 15 strongest moments, so there is no manual scrubbing.'],
+  ['AI viral moment detection', 'Google Gemini 3.1 Flash-Lite scores the transcript and scene data to find the 3 to 15 strongest moments, so there is no manual scrubbing.'],
   ['Smart 9:16 vertical cropping', 'Dual-mode reframing with MediaPipe face tracking and a YOLOv8 fallback, stabilised so the camera holds still instead of swinging.'],
   ['Word-level automatic subtitles', 'faster-whisper produces a timestamp for every word, and the subtitles are burned in with FFmpeg.'],
   ['AI voice dubbing in 30+ languages', 'ElevenLabs translates the audio while preserving the speaker\'s voice, then the new track is re-transcribed so subtitles match.'],
@@ -54,7 +54,7 @@ const FEATURES = [
 
 const STEPS = [
   ['Upload a long-form video', 'Any video you own: podcasts, webinars, livestreams, interviews, or a YouTube link.'],
-  ['AI finds the best moments', 'Gemini 3.0 Flash returns 3 to 15 candidate clips of 15 to 60 seconds each.'],
+  ['AI finds the best moments', 'Gemini 3.1 Flash-Lite returns 3 to 15 candidate clips of 15 to 60 seconds each.'],
   ['Smart cropping to vertical 9:16', 'Face-tracked reframing keeps the subject centred without the camera swinging.'],
   ['Subtitles, hooks and effects', 'Word-level subtitles, an AI hook overlay, optional effects and dubbing into 30+ languages.'],
   ['Download or post directly', 'Export the clips or publish straight to TikTok, Instagram Reels and YouTube Shorts.'],

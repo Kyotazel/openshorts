@@ -87,7 +87,7 @@
           "@id": "https://www.openshorts.app/#software",
           "name": "OpenShorts",
           "alternateName": "OpenShorts self-hosted",
-          "description": "Open source AI clip generator, MIT licensed and self-hosted with Docker. Turns long-form videos into viral-ready 9:16 clips for TikTok, Instagram Reels and YouTube Shorts using Google Gemini 3.0 Flash for moment detection, faster-whisper for word-level subtitles and MediaPipe for face-tracked reframing. This edition is free with no watermark and no usage cap; you supply your own API keys. The hosted service is priced separately.",
+          "description": "Open source AI clip generator, MIT licensed and self-hosted with Docker. Turns long-form videos into viral-ready 9:16 clips for TikTok, Instagram Reels and YouTube Shorts using Google Gemini 3.1 Flash-Lite for moment detection, faster-whisper for word-level subtitles and MediaPipe for face-tracked reframing. This edition is free with no watermark and no usage cap; you supply your own API keys. The hosted service is priced separately.",
           "applicationCategory": "MultimediaApplication",
           "operatingSystem": "Cross-platform (Docker)",
           "url": "https://www.openshorts.app/",
@@ -98,7 +98,7 @@
           "softwareVersion": "2.0",
           "screenshot": "https://www.openshorts.app/og-image.png",
           "featureList": [
-            "AI viral moment detection with Google Gemini 3.0 Flash",
+            "AI viral moment detection with Google Gemini 3.1 Flash-Lite",
             "Smart 9:16 vertical cropping with MediaPipe face tracking and YOLOv8 fallback",
             "Automatic subtitle generation with word-level timestamps",
             "AI voice dubbing in 30+ languages via ElevenLabs",
@@ -173,7 +173,7 @@
               "name": "What is OpenShorts?",
               "acceptedAnswer": {
                 "@type": "Answer",
-                "text": "OpenShorts is an open source AI clip generator that turns long videos (podcasts, webinars, livestreams, vlogs, interviews) into viral-ready 9:16 vertical clips for TikTok, Instagram Reels and YouTube Shorts. faster-whisper transcribes the audio with word-level timestamps, PySceneDetect finds the scene boundaries, and Google Gemini 3.0 Flash scores the transcript to pick the 3 to 15 strongest moments. Each clip is then reframed to vertical with MediaPipe face tracking and subtitled automatically. It comes in two editions: self-hosted, which is free and open source under MIT, and OpenShorts Cloud, which is the hosted service with a free 20 minute per month tier and paid plans from $12 per month."
+                "text": "OpenShorts is an open source AI clip generator that turns long videos (podcasts, webinars, livestreams, vlogs, interviews) into viral-ready 9:16 vertical clips for TikTok, Instagram Reels and YouTube Shorts. faster-whisper transcribes the audio with word-level timestamps, PySceneDetect finds the scene boundaries, and Google Gemini 3.1 Flash-Lite scores the transcript to pick the 3 to 15 strongest moments. Each clip is then reframed to vertical with MediaPipe face tracking and subtitled automatically. It comes in two editions: self-hosted, which is free and open source under MIT, and OpenShorts Cloud, which is the hosted service with a free 20 minute per month tier and paid plans from $12 per month."
               }
             },
             {
@@ -197,7 +197,7 @@
               "name": "How does OpenShorts detect viral moments in videos?",
               "acceptedAnswer": {
                 "@type": "Answer",
-                "text": "It uses a multi-step pipeline. faster-whisper transcribes the video with word-level timestamps. PySceneDetect identifies the scene boundaries. Google Gemini 3.0 Flash then receives the timestamped transcript and the scene data together, and returns the 3 to 15 strongest segments of 15 to 60 seconds each, scored on hook strength, emotional payload and whether the segment stands alone without its surrounding context. Passing the transcript and the scene boundaries together is what stops a clip from starting mid-shot."
+                "text": "It uses a multi-step pipeline. faster-whisper transcribes the video with word-level timestamps. PySceneDetect identifies the scene boundaries. Google Gemini 3.1 Flash-Lite then receives the timestamped transcript and the scene data together, and returns the 3 to 15 strongest segments of 15 to 60 seconds each, scored on hook strength, emotional payload and whether the segment stands alone without its surrounding context. Passing the transcript and the scene boundaries together is what stops a clip from starting mid-shot."
               }
             },
             {
