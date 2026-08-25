@@ -73,3 +73,29 @@ def split_ranges(ranges):
 
 def in_split(t, splits):
     return any(s <= t < e for s, e in splits or [])
+
+
+def remap(ranges, segments):
+    """Carry ranges across a cut-and-concat. ``segments`` are the kept
+    stretches of the SOURCE file in order ({"start", "end"}); the output is
+    those segments back to back, so each range is clipped to every segment it
+    overlaps and shifted to where that segment landed. This is what the fast
+    rerender needs: it never reframes, so the only layout information it can
+    have is the canonical clip's, seen through the new cut."""
+    out = []
+    offset = 0.0
+    for seg in segments or []:
+        try:
+            seg_s, seg_e = float(seg["start"]), float(seg["end"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if seg_e <= seg_s:
+            continue
+        for r in normalise(ranges):
+            s, e = max(r["start"], seg_s), min(r["end"], seg_e)
+            if e > s:
+                out.append({"start": round(s - seg_s + offset, 3),
+                            "end": round(e - seg_s + offset, 3),
+                            "layout": r["layout"]})
+        offset += seg_e - seg_s
+    return out

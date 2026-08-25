@@ -90,3 +90,44 @@ class TestCaptionerReadsSidecar:
         monkeypatch.setattr(subtitles, "generate_ass", fake_generate_ass)
         main.auto_caption_clip(clip, _transcript([(" a", 0.0, 0.5)]), 0.0, 3.0)
         assert seen["split_ranges"] == [(0.0, 3.0)]
+
+
+class TestRemapAcrossCut:
+    def test_ranges_follow_the_kept_segments(self):
+        ranges = [(0, 10, "split"), (10, 20, "track"), (20, 30, "split")]
+        # Keep 5-12 and 22-30 of the source: output is 0-7 then 7-15.
+        segs = [{"start": 5, "end": 12}, {"start": 22, "end": 30}]
+        got = layout_ranges.remap(ranges, segs)
+        assert got == [
+            {"start": 0.0, "end": 5.0, "layout": "split"},
+            {"start": 5.0, "end": 7.0, "layout": "track"},
+            {"start": 7.0, "end": 15.0, "layout": "split"},
+        ]
+        assert layout_ranges.split_ranges(got) == [(0.0, 5.0), (7.0, 15.0)]
+
+    def test_no_input_ranges_means_none(self):
+        assert layout_ranges.remap([], [{"start": 0, "end": 5}]) == []
+
+    def test_fast_recut_carries_the_sidecar(self, tmp_path, monkeypatch):
+        import shutil
+        import recut
+        src = tmp_path / "canon.mp4"
+        src.write_bytes(b"x")
+        layout_ranges.write(str(src), [(0, 4, "SPLIT"), (4, 8, "TRACK")])
+        # Stand in for ffmpeg: the "cut" is a copy.
+        monkeypatch.setattr(recut, "run_cut_concat",
+                            lambda i, segs, out, wd, runner=None: shutil.copy(i, out))
+        served, clean = recut.perform_recut(
+            input_path=str(src), segments=[{"start": 2, "end": 6}],
+            output_dir=str(tmp_path), clean_name="c.mp4", reframe=False)
+        assert layout_ranges.read(str(tmp_path / clean)) == [
+            {"start": 0.0, "end": 2.0, "layout": "split"},
+            {"start": 2.0, "end": 4.0, "layout": "track"}]
+
+
+class TestLayoutEnvNone:
+    def test_none_switches_the_picker_off_for_the_job(self):
+        app_module = pytest.importorskip("app")
+        assert app_module.layout_env(["none"]) == {"AUTO_LAYOUT": "0"}
+        assert app_module.layout_env(["auto"]) == {"AUTO_LAYOUT": "1"}
+        assert app_module.layout_env(["split"])["SPLIT_LAYOUT"] == "1"

@@ -87,9 +87,13 @@ answers describe the paid product as free.
 ### Cómo se elige el layout
 
 `POST /api/process` acepta `layouts`: una lista (JSON) o cadena separada por
-comas con `auto`, `split`, `screencast`, `speaker_cut`, `punch_in`. Cada nombre
-enciende su variable de entorno para **ese** trabajo (`app.py:layout_env`); sin
-`layouts` el pipeline se comporta exactamente como antes.
+comas con `auto`, `split`, `screencast`, `speaker_cut`, `punch_in` y `none`.
+Cada nombre enciende su variable de entorno para **ese** trabajo
+(`app.py:layout_env`); `none` apaga el picker aunque prod corra con
+`AUTO_LAYOUT=1` (recorte simple y nada más). Sin `layouts` manda el env del
+despliegue, que desde el 25-ago-2026 es `AUTO_LAYOUT=1`. El dashboard lo expone
+en opciones avanzadas ("vertical layout": auto / split / screencast / none,
+`MediaInput.jsx`, recordado en `localStorage.os_layout`).
 
 `auto` activa `layout_picker.py`: **una** llamada a Gemini por vídeo de origen
 (no por clip) que elige entre `none` / `screencast` / `split`. Medido sobre el
@@ -131,7 +135,9 @@ se desactiva porque el modelo diga `none`.
   `subtitles.generate_ass`), the one place they cover nobody; the render
   records which stretches are stacked in a `<clip>.layout.json` sidecar
   (`layout_ranges.py`) and every metadata writer copies it into the clip's
-  `layout_ranges`, so `/api/subtitle` finds it after a restyle too. Only the
+  `layout_ranges`, so `/api/subtitle` finds it after a restyle too. The fast
+  rerender (cut without reframe) carries the canonical clip's ranges through
+  the new cut (`layout_ranges.remap`, in `recut.perform_recut`). Only the
   ASS path can do this; SRT burns keep one alignment for the whole file.
 - **SCREENCAST / WIDE Modes** (`screencast_layout.py`, `SCREENCAST_LAYOUT=1`):
   for scenes whose meaning lives outside the centre. Gemini reports each range's

@@ -1899,12 +1899,18 @@ def layout_env(requested):
     The special value "auto" hands the choice to Gemini (one call per video).
     It composes with explicit picks: layout_picker only ever adds, so asking for
     "auto,punch_in" means "decide the layout yourself, and punch in regardless".
+    "none" is the opposite: it switches the picker OFF for this job even when
+    the deployment runs with AUTO_LAYOUT=1, for the user who wants the plain
+    single crop and nothing clever.
     """
     env = {}
     for name in requested or []:
         key = str(name).strip().lower()
         if key == "auto":
             env["AUTO_LAYOUT"] = "1"
+            continue
+        if key == "none":
+            env["AUTO_LAYOUT"] = "0"
             continue
         var = LAYOUT_ENV.get(key)
         if not var:

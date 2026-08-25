@@ -30,6 +30,12 @@ export default function MediaInput({ onProcess, isProcessing }) {
     const [autoHookStyle, setAutoHookStyle] = useState(() => {
         try { return localStorage.getItem('os_auto_hook_style') || 'classic'; } catch { return 'classic'; }
     });
+    // Layout: 'auto' lets the AI pick per video (server default); the others
+    // force one on so a podcast host who knows what they uploaded doesn't
+    // depend on the detector, and 'none' keeps the plain single crop.
+    const [layout, setLayout] = useState(() => {
+        try { return localStorage.getItem('os_layout') || 'auto'; } catch { return 'auto'; }
+    });
     const infoRef = useRef(null);
 
     // Close the compatibility popover on any outside click.
@@ -78,10 +84,12 @@ export default function MediaInput({ onProcess, isProcessing }) {
             clipMaxSeconds: clipMaxSeconds || null,
             autoHook,
             autoHookStyle,
+            layout,
         };
         try {
             localStorage.setItem('os_auto_hook', autoHook ? '1' : '0');
             localStorage.setItem('os_auto_hook_style', autoHookStyle);
+            localStorage.setItem('os_layout', layout);
         } catch { /* ignore */ }
         if (mode === 'url' && url) {
             onProcess({ type: 'url', payload: url, acknowledged: true, outputFormat, ...advanced });
@@ -286,6 +294,20 @@ export default function MediaInput({ onProcess, isProcessing }) {
                                 Targets, not guarantees: the AI returns fewer clips when the
                                 material doesn't hold them. Leave blank to let it decide.
                             </p>
+                            <div className="col-span-1 sm:col-span-3 flex flex-wrap items-center justify-between gap-3 pt-3 sm:pt-1 border-t border-rule">
+                                <span className="text-xs text-ink2">vertical layout</span>
+                                <select
+                                    value={layout}
+                                    onChange={(e) => setLayout(e.target.value)}
+                                    className="input-field !w-auto text-xs py-1.5"
+                                    aria-label="vertical layout"
+                                >
+                                    <option value="auto">Auto (AI picks per video)</option>
+                                    <option value="split">Two speakers stacked</option>
+                                    <option value="screencast">Screen over presenter</option>
+                                    <option value="none">Single crop only</option>
+                                </select>
+                            </div>
                             <div className="col-span-1 sm:col-span-3 flex flex-wrap items-center justify-between gap-3 pt-3 sm:pt-1 border-t border-rule">
                                 <label className="flex items-center gap-2 text-xs text-ink2 cursor-pointer select-none">
                                     <input
