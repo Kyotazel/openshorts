@@ -252,6 +252,20 @@ container before stopping the old one (rolling update) and both share
 - SIGTERM (`docker stop`) drains too, up to `DRAIN_TIMEOUT_SECONDS` (840),
   then hands the signal to uvicorn. The app's Coolify stop grace period is
   900 s (`application_settings.stop_grace_period`); keep the timeout below it.
+  After the drain hands the signal to uvicorn, `--timeout-graceful-shutdown 15`
+  (Dockerfile) caps the wait for in-flight connections: uvicorn's default is
+  unbounded, and one open range download kept a drained container alive for
+  the full grace period while Traefik still routed half the traffic to its
+  closed port.
+- `/health/ready` + the Dockerfile `HEALTHCHECK` are what keep Traefik off a
+  dying container: its docker provider only routes to `healthy` containers,
+  so an instance answers 503 from the moment it gets SIGTERM (out of rotation
+  within ~10 s, socket still open) and a booting one gets no traffic until it
+  answers. Only SIGTERM flips it, not the marker drain: at that point the new
+  container is still booting and nobody else would be routable. The Coolify
+  app has its health check enabled on that path so it waits for the new
+  container to be `healthy` before stopping the old one. `/health` stays a
+  plain liveness probe for the external watcher.
 - `/api/status` answers from disk for a job this instance never held, so a
   poll landing on either container during the handover is fine.
 - `main.py` leaves `.transcript_checkpoint.json` in the job dir so a job that

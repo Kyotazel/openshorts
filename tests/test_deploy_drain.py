@@ -136,6 +136,35 @@ class TestDrain:
         assert calls, "must still exit so the deploy can finish"
 
 
+class TestReadiness:
+    """Traefik drops a container the moment its Docker healthcheck fails, so
+    /health/ready must go 503 on SIGTERM (socket still open, proxy stops
+    sending traffic) but stay 200 on a marker drain (the newer instance is
+    still booting and nobody else is routable yet)."""
+
+    def _get(self):
+        async def go():
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app_module.app),
+                                         base_url="http://t") as c:
+                return await c.get("/health/ready")
+        return asyncio.run(go())
+
+    def test_ready_by_default(self, out, monkeypatch):
+        monkeypatch.setattr(app_module, "_stopping", False)
+        assert self._get().status_code == 200
+
+    def test_marker_drain_stays_ready(self, out, monkeypatch):
+        monkeypatch.setattr(app_module, "_stopping", False)
+        (out / app_module._INSTANCE_MARKER).write_text("newer")
+        app_module._check_instance_marker()
+        assert app_module._draining
+        assert self._get().status_code == 200
+
+    def test_sigterm_turns_unready(self, out, monkeypatch):
+        monkeypatch.setattr(app_module, "_stopping", True)
+        assert self._get().status_code == 503
+
+
 class TestStatusFromDisk:
     def _client(self):
         return httpx.AsyncClient(transport=httpx.ASGITransport(app=app_module.app),

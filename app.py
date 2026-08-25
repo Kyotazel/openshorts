@@ -613,6 +613,9 @@ RESUME_SCAN_INTERVAL = 30            # seconds between looks for stale manifests
 HANDOVER_CHECK_INTERVAL = 5          # seconds between looks at the marker
 DRAIN_TIMEOUT_SECONDS = int(os.environ.get("DRAIN_TIMEOUT_SECONDS", "840"))
 _draining = False
+_stopping = False                    # SIGTERM received: report not-ready so the
+                                     # proxy stops routing here before the
+                                     # listening socket closes
 _running_jobs: set = set()           # job ids with a live subprocess here
 
 
@@ -732,6 +735,8 @@ def _install_drain_signal_handler():
     loop = asyncio.get_running_loop()
 
     def on_sigterm():
+        global _stopping
+        _stopping = True
         _begin_drain("SIGTERM")
         asyncio.ensure_future(_drain_then_exit(previous))
 
@@ -1766,8 +1771,22 @@ async def run_job(job_id, job_data):
 
 @app.get("/health")
 async def health():
-    """Lightweight liveness probe for uptime monitoring / Coolify health checks."""
+    """Lightweight liveness probe for uptime monitoring."""
     return {"status": "ok"}
+
+
+@app.get("/health/ready")
+async def health_ready():
+    """Readiness probe for the Docker HEALTHCHECK (Dockerfile). Traefik's docker
+    provider drops a container from the load balancer as soon as it turns
+    unhealthy, so answering 503 from the moment SIGTERM arrives pulls this
+    instance out of rotation while it can still serve, instead of after its
+    socket is gone. Only SIGTERM flips it: a drain triggered by the instance
+    marker starts while the new container is still booting, and going
+    unready then would leave nobody routable."""
+    if _stopping:
+        return JSONResponse({"status": "stopping"}, status_code=503)
+    return {"status": "ready"}
 
 @app.get("/api/config")
 async def get_config():
