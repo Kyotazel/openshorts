@@ -613,6 +613,21 @@ HEARTBEAT_STALE_AFTER = 60           # no heartbeat for this long = nobody has i
 RESUME_SCAN_INTERVAL = 30            # seconds between looks for stale manifests
 HANDOVER_CHECK_INTERVAL = 5          # seconds between looks at the marker
 DRAIN_TIMEOUT_SECONDS = int(os.environ.get("DRAIN_TIMEOUT_SECONDS", "840"))
+# After the jobs are drained, keep SERVING this long with /health/ready at 503
+# before closing the socket: the proxy only drops a container once its Docker
+# healthcheck has failed interval*retries times (15 s with the Coolify
+# settings), and closing the socket earlier sends that many seconds of
+# requests to a dead port. Measured 2026-08-25: ~60 s of alternating 502/200
+# per deploy with retries=12 and no grace at all.
+PROXY_DRAIN_SECONDS = float(os.environ.get("PROXY_DRAIN_SECONDS", "20"))
+# Once uvicorn has the signal it closes within --timeout-graceful-shutdown
+# (15 s), but the interpreter then waits for non-daemon threads, and a
+# request cancelled mid-flight can leave an executor thread stuck in a
+# network probe (yt-dlp) for as long as that takes. Seen 2026-08-25: "Finished
+# server process" printed, container alive until the 900 s SIGKILL, deploy
+# stuck in "Removing old containers". So the process is ended outright a
+# little after uvicorn was told to stop. Jobs are already drained by then.
+HARD_EXIT_SECONDS = float(os.environ.get("HARD_EXIT_SECONDS", "30"))
 _draining = False
 _stopping = False                    # SIGTERM received: report not-ready so the
                                      # proxy stops routing here before the
@@ -711,9 +726,13 @@ async def _resume_scan():
             print(f"⚠️ Resume scan failed: {e}")
 
 
-async def _drain_then_exit(previous_handler, timeout=None):
-    """Wait for running jobs (bounded), then hand the signal to uvicorn."""
+async def _drain_then_exit(previous_handler, timeout=None, proxy_grace=None,
+                           hard_exit_after=None):
+    """Wait for running jobs (bounded), let the proxy notice we are not ready,
+    then hand the signal to uvicorn."""
     timeout = DRAIN_TIMEOUT_SECONDS if timeout is None else timeout
+    proxy_grace = PROXY_DRAIN_SECONDS if proxy_grace is None else proxy_grace
+    hard_exit_after = HARD_EXIT_SECONDS if hard_exit_after is None else hard_exit_after
     deadline = time.time() + timeout
     while _running_jobs and time.time() < deadline:
         await asyncio.sleep(1)
@@ -721,11 +740,24 @@ async def _drain_then_exit(previous_handler, timeout=None):
         print(f"⏱️ Drain timeout after {timeout}s with {len(_running_jobs)} job(s) still "
               f"running — they will resume on the next instance.")
     else:
-        print("✅ Drained: no running jobs, shutting down.")
+        print("✅ Drained: no running jobs.")
+    if proxy_grace > 0:
+        print(f"⏳ Serving {proxy_grace:.0f}s more while the proxy drops this instance.")
+        await asyncio.sleep(proxy_grace)
+    print("👋 Shutting down.")
+    if hard_exit_after > 0:
+        import threading
+        threading.Timer(hard_exit_after, _hard_exit).start()
     if callable(previous_handler):
         previous_handler(signal.SIGTERM, None)
     else:
         os._exit(0)
+
+
+def _hard_exit():
+    print(f"⛔ Still alive {HARD_EXIT_SECONDS:.0f}s after the stop signal (a thread "
+          f"is hanging) — exiting now.", flush=True)
+    os._exit(0)
 
 
 def _install_drain_signal_handler():

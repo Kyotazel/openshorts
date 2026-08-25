@@ -271,8 +271,16 @@ container before stopping the old one (rolling update) and both share
   container is still booting and nobody else would be routable. The Coolify
   app has its health check enabled on that path so it waits for the new
   container to be `healthy` before stopping the old one. With that option on,
-  Coolify replaces the Dockerfile HEALTHCHECK with its own curl/wget command,
-  so the image must ship `curl` or every deploy rolls back as unhealthy.
+  Coolify replaces the Dockerfile HEALTHCHECK with its own curl/wget command
+  AND its own interval/retries (5 s × 3), so the image must ship `curl` or
+  every deploy rolls back as unhealthy, and a stopping container takes 15 s
+  to turn `unhealthy`. That is why the drain keeps serving for
+  `PROXY_DRAIN_SECONDS` (20) after the jobs are done before it hands the
+  signal to uvicorn: closing the socket earlier is 502s until Traefik
+  notices (measured ~60 s per deploy with retries=12 and no grace). And
+  `HARD_EXIT_SECONDS` (30) after that the process is ended outright: uvicorn
+  finishing does not end the interpreter while an executor thread hangs in
+  a network probe, and that kept a drained container alive for the full 900 s.
   `/health` stays a plain liveness probe for the external watcher.
 - `/api/status` answers from disk for a job this instance never held, so a
   poll landing on either container during the handover is fine.

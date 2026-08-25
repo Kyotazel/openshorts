@@ -124,7 +124,8 @@ class TestDrain:
                 app_module._running_jobs.discard("j1")
             asyncio.create_task(finish_soon())
             t = time.time()
-            await app_module._drain_then_exit(lambda sig, frame: calls.append(sig), timeout=5)
+            await app_module._drain_then_exit(lambda sig, frame: calls.append(sig),
+                                              timeout=5, proxy_grace=0, hard_exit_after=0)
             return time.time() - t
         waited = asyncio.run(scenario())
         assert calls and waited >= 0.2
@@ -132,8 +133,30 @@ class TestDrain:
     def test_exit_gives_up_at_the_timeout(self, out):
         calls = []
         app_module._running_jobs.add("stuck")
-        asyncio.run(app_module._drain_then_exit(lambda sig, frame: calls.append(sig), timeout=0.3))
+        asyncio.run(app_module._drain_then_exit(lambda sig, frame: calls.append(sig),
+                                                timeout=0.3, proxy_grace=0, hard_exit_after=0))
         assert calls, "must still exit so the deploy can finish"
+
+    def test_keeps_serving_for_the_proxy_grace_after_draining(self, out):
+        calls = []
+        t = time.time()
+        asyncio.run(app_module._drain_then_exit(lambda sig, frame: calls.append(sig),
+                                                timeout=1, proxy_grace=0.3, hard_exit_after=0))
+        assert calls and time.time() - t >= 0.3
+
+    def test_arms_a_hard_exit_after_handing_the_signal_on(self, out, monkeypatch):
+        armed = []
+        import threading
+
+        class FakeTimer:
+            def __init__(self, delay, fn):
+                armed.append((delay, fn))
+            def start(self):
+                pass
+        monkeypatch.setattr(threading, "Timer", FakeTimer)
+        asyncio.run(app_module._drain_then_exit(lambda sig, frame: None, timeout=1,
+                                                proxy_grace=0, hard_exit_after=7))
+        assert armed and armed[0][0] == 7 and armed[0][1] is app_module._hard_exit
 
 
 class TestReadiness:
