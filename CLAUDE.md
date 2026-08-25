@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-OpenShorts is an AI-powered vertical video generator that transforms long YouTube videos or local uploads into viral-ready short clips (9:16 format) for TikTok, Instagram Reels, and YouTube Shorts. Uses Google Gemini 2.0 Flash for viral moment detection and title generation.
+OpenShorts is an AI-powered vertical video generator that transforms long YouTube videos or local uploads into viral-ready short clips (9:16 format) for TikTok, Instagram Reels, and YouTube Shorts. Uses Google Gemini 3.1 Flash-Lite (`gemini-3.1-flash-lite`, overridable with `GEMINI_MODEL`) for viral moment detection and title generation.
 
 ## Development Commands
 
@@ -199,7 +199,7 @@ se desactiva porque el modelo diga `none`.
   endpoint changes. Key management itself refuses API-key auth: a leaked key
   cannot mint replacements.
 - **MCP server** (`mcp_server.py`, mounted always): stateless Streamable-HTTP
-  JSON-RPC at `/mcp` — no SDK dependency, ~3 methods + 6 tools. Each tool calls
+  JSON-RPC at `/mcp` — no SDK dependency, ~3 methods + 7 tools. Each tool calls
   back into this same app in-process (`httpx.ASGITransport`) forwarding the
   caller's auth headers, so it can never drift from the REST behavior. Cloud
   mode 401s without a resolvable user; self-host stays BYOK-open.
