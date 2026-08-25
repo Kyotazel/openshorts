@@ -271,6 +271,9 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
                 });
             }
         }
+        // Reset only when the modal opens for a clip; connection changes while
+        // it is open must not wipe the user's selection.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [showModal, clip]);
 
     const handleAutoEdit = async () => {

@@ -81,8 +81,6 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
   const [actorGallery, setActorGallery] = useState([]);
   const [loadingGallery, setLoadingGallery] = useState(false);
   const [uploadedActorPreview, setUploadedActorPreview] = useState(null); // {localPreview, serverUrl}
-  const [productPhoto, setProductPhoto] = useState(null); // {preview, serverUrl}
-  const [productDescription, setProductDescription] = useState('');
 
   // Step 3: Generate
   const [generating, setGenerating] = useState(false);
@@ -102,12 +100,14 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
   const [copied, setCopied] = useState('');
   const [logsExpanded, setLogsExpanded] = useState(true);
 
-  // Pre-fill from cache on mount
+  // Pre-fill from cache on mount (once: later cache changes must not
+  // overwrite what the user typed).
   useEffect(() => {
     if (fromCache && scripts.length > 0 && !actorDescription) {
       setActorDescription(scripts[0].actor_description || '');
       setEditedNarration(scripts[0].full_narration || '');
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Fetch actor gallery on mount
@@ -125,6 +125,7 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
     if (elevenLabsKey) {
       fetchVoices();
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [elevenLabsKey]);
 
   // Reset selected voice when actor gender changes
@@ -142,6 +143,8 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
     } else {
       setSelectedVoice(genderDefaults[`${language}-${actorGender}`] || genderDefaults['en-female']);
     }
+    // Re-pick only when the gender/language choice changes, not on every voices refresh.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [actorGender, language]);
 
   // Poll generation status

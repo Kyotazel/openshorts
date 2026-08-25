@@ -191,7 +191,7 @@ const NAV = `
   <a class="cta" href="${SITE.url}/">Get free clips</a>
 </div></header>`
 
-const footer = (related) => `
+const footer = (_related) => `
 <footer class="site"><div class="wrap">
   <div class="row">
     <a href="${SITE.url}/">OpenShorts</a>

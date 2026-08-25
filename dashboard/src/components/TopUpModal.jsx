@@ -55,6 +55,8 @@ export default function TopUpModal({ onClose, required, remaining, context = 'wa
         setTopups(d.topups || []);
       })
       .catch(() => {});
+    // Plans are fetched once per open; the props only shape the copy.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Instrumented in three steps on purpose. Between 25-jul and 1-ago the modals

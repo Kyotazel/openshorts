@@ -3,6 +3,7 @@ import Modal from './ui/Modal';
 
 const DISMISS_KEY = 'os_watermark_notice_dismissed';
 
+// eslint-disable-next-line react-refresh/only-export-components
 export function watermarkNoticeDismissed() {
   try { return localStorage.getItem(DISMISS_KEY) === '1'; } catch { return false; }
 }

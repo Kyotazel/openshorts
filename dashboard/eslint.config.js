@@ -10,7 +10,7 @@ export default defineConfig([
     files: ['**/*.{js,jsx}'],
     extends: [
       js.configs.recommended,
-      reactHooks.configs.flat.recommended,
+      reactHooks.configs['recommended-latest'],
       reactRefresh.configs.vite,
     ],
     languageOptions: {
@@ -23,7 +23,22 @@ export default defineConfig([
       },
     },
     rules: {
-      'no-unused-vars': ['error', { varsIgnorePattern: '^[A-Z_]' }],
+      // `catch (e)` / `catch (_)` with the error deliberately ignored is the
+      // house style for best-effort localStorage and fetch calls.
+      'no-unused-vars': ['error', {
+        varsIgnorePattern: '^[A-Z_]', argsIgnorePattern: '^_', caughtErrors: 'none',
+      }],
+      // Contexts and modals export a hook or a constant next to the component.
+      'react-refresh/only-export-components': ['error', { allowConstantExport: true }],
     },
+  },
+  {
+    // The entry point mounts a few one-off components; nothing here hot-reloads.
+    files: ['src/main.jsx'],
+    rules: { 'react-refresh/only-export-components': 'off' },
+  },
+  {
+    files: ['vite.config.js', 'vite-plugin-seo.js', 'seo/**/*.js'],
+    languageOptions: { globals: { ...globals.node } },
   },
 ])
