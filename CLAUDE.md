@@ -264,8 +264,10 @@ container before stopping the old one (rolling update) and both share
   answers. Only SIGTERM flips it, not the marker drain: at that point the new
   container is still booting and nobody else would be routable. The Coolify
   app has its health check enabled on that path so it waits for the new
-  container to be `healthy` before stopping the old one. `/health` stays a
-  plain liveness probe for the external watcher.
+  container to be `healthy` before stopping the old one. With that option on,
+  Coolify replaces the Dockerfile HEALTHCHECK with its own curl/wget command,
+  so the image must ship `curl` or every deploy rolls back as unhealthy.
+  `/health` stays a plain liveness probe for the external watcher.
 - `/api/status` answers from disk for a job this instance never held, so a
   poll landing on either container during the handover is fine.
 - `main.py` leaves `.transcript_checkpoint.json` in the job dir so a job that
