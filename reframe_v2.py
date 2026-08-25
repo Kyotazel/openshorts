@@ -25,6 +25,7 @@ import active_speaker
 import camera_inset
 import punch_in
 import screencast_layout
+import layout_ranges
 import split_layout
 from ffmpeg_utils import (video_encode_args, escape_filter_value, QUALITY_FAST,
                           METADATA_SCRUB)
@@ -565,5 +566,8 @@ def render(input_video, final_output_video, aspect_ratio, content_ranges=None,
         import shutil
         shutil.rmtree(workdir, ignore_errors=True)
 
+    # Tell the caption pass which stretches are stacked (see layout_ranges).
+    layout_ranges.write(final_output_video,
+                        [(s / fps, e / fps, strategy) for s, e, strategy in ranges])
     print(f"   ✅ Clip saved to {final_output_video}")
     return True

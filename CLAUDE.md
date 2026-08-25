@@ -126,7 +126,13 @@ se desactiva porque el modelo diga `none`.
   visible **in the same frame** for at least half the sampled frames — that is
   what separates a real two-shot from a plano/contraplano, where stacking would
   show the same person twice. `SPLIT_TIGHTNESS` (default 0.8) trades a little
-  upscale for keeping the other speaker out of each half.
+  upscale for keeping the other speaker out of each half. Captions on a SPLIT
+  stretch sit on the seam between the halves (`{\an5}` per word event in
+  `subtitles.generate_ass`), the one place they cover nobody; the render
+  records which stretches are stacked in a `<clip>.layout.json` sidecar
+  (`layout_ranges.py`) and every metadata writer copies it into the clip's
+  `layout_ranges`, so `/api/subtitle` finds it after a restyle too. Only the
+  ASS path can do this; SRT burns keep one alignment for the whole file.
 - **SCREENCAST / WIDE Modes** (`screencast_layout.py`, `SCREENCAST_LAYOUT=1`):
   for scenes whose meaning lives outside the centre. Gemini reports each range's
   **width_fraction**, and that is the gate — coverage was tried before and did

@@ -26,6 +26,7 @@ from starlette.background import BackgroundTask
 from pydantic import BaseModel
 from s3_uploader import upload_job_artifacts, list_all_clips, upload_actor_to_s3, list_actor_gallery, upload_video_to_gallery, list_video_gallery
 import recut
+import layout_ranges
 
 load_dotenv()
 
@@ -3021,7 +3022,11 @@ async def _rerender_locked(req: RerenderRequest, request: Request, job):
         new_end = max(s['end'] for s in segments)
 
         updates = {'video_url': new_video_url, 'start': new_start,
-                   'end': new_end, 'recipe': new_recipe}
+                   'end': new_end, 'recipe': new_recipe,
+                   # The stacked stretches of THIS render (empty on the fast
+                   # path, which never reframes): captions follow them.
+                   'layout_ranges': layout_ranges.read(
+                       os.path.join(output_dir, _clean_recut_name))}
         # Per-scene manual framing is keyed by scene indices of a specific cut;
         # this render neither applied it nor can it survive a changed cut, so
         # clear it rather than let /scenes serve stale overrides against the
@@ -3375,6 +3380,7 @@ async def _reframe_locked(req: ReframeRequest, request: Request, job, overrides)
             'video_url': new_video_url,
             'recipe': new_recipe,
             'crop_overrides': {str(k): v for k, v in overrides.items()},
+            'layout_ranges': layout_ranges.read(os.path.join(output_dir, _clean)),
         }
         clip.update(updates)
         data['shorts'] = clips
@@ -3659,7 +3665,13 @@ async def add_subtitles(req: SubtitleRequest, request: Request):
     srt_path = os.path.join(output_dir, srt_filename)
 
     # Style options shared by the karaoke ASS generator paths.
+    # Stacked (SPLIT) stretches put their captions on the seam. The metadata
+    # copy is authoritative; the sidecar covers clips rendered before it was
+    # recorded there.
+    seam_ranges = layout_ranges.split_ranges(
+        clip_data.get('layout_ranges') or layout_ranges.read(input_path))
     karaoke_opts = dict(
+        split_ranges=seam_ranges,
         alignment=req.position, fontsize=req.font_size, font_name=req.font_name,
         font_color=req.font_color, border_color=req.border_color,
         border_width=req.border_width, highlight_color=req.highlight_color,

@@ -306,7 +306,7 @@ def generate_ass(transcript, clip_start, clip_end, output_path,
                  border_color="#000000", border_width=2,
                  highlight_color="#FFD700", bg_color="#000000", bg_opacity=0.0,
                  effect="none", base_opacity=1.0, uppercase=False,
-                 margin_v=SAFE_MARGIN_V):
+                 margin_v=SAFE_MARGIN_V, split_ranges=None):
     """
     Generates a karaoke-style ASS file: each block is shown like the SRT path,
     but the currently spoken word is rendered in highlight_color (modern
@@ -329,6 +329,19 @@ def generate_ass(transcript, clip_start, clip_end, output_path,
 
     align_map = {'top': 8, 'middle': 5, 'bottom': 2}
     ass_alignment = align_map.get(str(alignment).lower(), 2)
+
+    # On a SPLIT scene the two speakers are stacked and the seam between the
+    # halves (exactly mid-frame) is the one place the text covers nobody, so
+    # every word event inside such a stretch is anchored there with an inline
+    # \an5, per event rather than per style: a clip mixes stacked and single
+    # shots, and the text moves with the cut. ``split_ranges`` is a list of
+    # (start, end) in clip seconds (layout_ranges.split_ranges); the style's
+    # own alignment still rules everywhere else. Only the ASS path can do
+    # this: SRT burns carry one alignment for the whole file.
+    seam_ranges = [(float(a), float(b)) for a, b in (split_ranges or [])]
+
+    def seam_prefix(t):
+        return "{\\an5}" if any(a <= t < b for a, b in seam_ranges) else ""
 
     safe_font = _sanitize_font_name(font_name)
     base_opacity = _clamp_number(base_opacity, 0.05, 1.0, 1.0)
@@ -409,7 +422,8 @@ def generate_ass(transcript, clip_start, clip_end, output_path,
                     parts.append(text)
 
             events.append(
-                f"Dialogue: 0,{_ass_time(ev_start)},{_ass_time(ev_end)},Default,,0,0,0,,{' '.join(parts)}"
+                f"Dialogue: 0,{_ass_time(ev_start)},{_ass_time(ev_end)},Default,,0,0,0,,"
+                f"{seam_prefix(ev_start)}{' '.join(parts)}"
             )
 
     if not events:

@@ -908,8 +908,13 @@ def finalize_clip_passthrough(input_video, final_output_video):
     return True
 
 
-def auto_caption_clip(clip_path, transcript, clip_start, clip_end):
+def auto_caption_clip(clip_path, transcript, clip_start, clip_end, split_ranges=None):
     """Burn the default caption style onto a finished clip.
+
+    ``split_ranges``: (start, end) stretches, in clip seconds, rendered with
+    the SPLIT layout; captions there sit on the seam between the two speakers
+    instead of the bottom. None reads the render's own sidecar next to
+    ``clip_path`` (layout_ranges), which is where recut hands it over.
 
     Captions are mandatory for short-form to land, but they were opt-in behind a
     modal and only 9% of delivered clips ever got them (prod audit, 25-jul-2026).
@@ -960,8 +965,12 @@ def auto_caption_clip(clip_path, transcript, clip_start, clip_end):
             output_dir, f"autosubs_{generation_id}_{uuid.uuid4().hex[:8]}.ass")
         out_path = os.path.join(output_dir, f"subtitled_{generation_id}_{stem}")
 
+        if split_ranges is None:
+            import layout_ranges as _layouts
+            split_ranges = _layouts.split_ranges(_layouts.read(clip_path))
         if not _subs.generate_ass(
                 transcript, clip_start, clip_end, ass_path,
+                split_ranges=split_ranges,
                 max_chars=style["max_chars"], max_duration=style["max_duration"],
                 alignment=style["alignment"], fontsize=style["font_size"],
                 font_name=style["font_name"], font_color=style["font_color"],
@@ -1847,12 +1856,18 @@ if __name__ == '__main__':
                     if success and os.environ.get("WATERMARK") == "1":
                         apply_watermark(clip_final_path)
                     deliver_path = clip_final_path
+                    # Which stretches were stacked (SPLIT): captions go on the
+                    # seam there, and /api/subtitle needs it again later.
+                    import layout_ranges as _layouts
+                    clip['layout_ranges'] = _layouts.read(clip_final_path)
                     if success and os.environ.get("AUTO_HOOK") == "1":
                         hooked = auto_hook_clip(clip_final_path, clip)
                         if hooked:
                             deliver_path, clip['auto_hook'] = hooked
                     if success:
-                        captioned = auto_caption_clip(deliver_path, transcript, start, end)
+                        captioned = auto_caption_clip(
+                            deliver_path, transcript, start, end,
+                            split_ranges=_layouts.split_ranges(clip['layout_ranges']))
                         print(f"   ✅ Clip {i+1} ready: {clip_final_path}")
                         # Hand the API the file to actually serve for this clip.
                         # Without it the status poller guesses the clean reframe
