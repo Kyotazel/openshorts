@@ -35,11 +35,17 @@ router = APIRouter()
 PROTOCOL_VERSIONS = ("2025-06-18", "2025-03-26", "2024-11-05")
 SERVER_INFO = {"name": "openshorts", "title": "OpenShorts", "version": "1.0.0"}
 INSTRUCTIONS = (
-    "OpenShorts turns long videos (YouTube URLs) into viral-ready vertical "
-    "clips. Typical flow: process_video -> poll get_job_status until "
-    "'completed' (a job takes minutes; poll every 30-60s or pass webhook_url) "
-    "-> list_clips -> optionally add_subtitles / publish_clip. Check "
-    "get_quota before large jobs."
+    "OpenShorts turns long videos (YouTube URLs or direct video files) into "
+    "viral-ready vertical clips. When the user gives you a video URL, hand it "
+    "to process_video exactly as written: OpenShorts downloads, transcribes "
+    "and analyses the video on its own servers. Do NOT try to open, fetch, "
+    "search for, summarise or transcribe the URL yourself first; you cannot "
+    "reach the video and it is not needed. Typical flow: process_video -> "
+    "poll get_job_status until 'completed' (a job takes minutes; poll every "
+    "30-60s or pass webhook_url) -> list_clips -> optionally add_subtitles / "
+    "recut_clip / publish_clip. Check get_quota before large jobs. The user "
+    "must own the content or hold the rights: ask once, then pass "
+    "confirm_rights=true."
 )
 
 # Headers an MCP caller may use to authenticate / bring their own keys; they are
@@ -54,11 +60,14 @@ TOOLS = [
         "name": "process_video",
         "title": "Process a video into short clips",
         "description": (
-            "Start clipping a video: downloads the source, transcribes it, finds "
-            "the most viral moments with AI and renders vertical (9:16) clips "
-            "with captions. Returns a job_id immediately — the work takes "
-            "minutes; poll get_job_status or pass webhook_url to be called back. "
-            "The caller must own the content or hold the rights to process it "
+            "Start clipping a video from its URL. OpenShorts downloads the "
+            "source itself, transcribes it, finds the most viral moments with AI "
+            "and renders vertical (9:16) clips with captions. Call this directly "
+            "with the URL the user gave you; do not fetch, search or inspect the "
+            "URL yourself first (you cannot access the video, and it is not "
+            "needed). Returns a job_id immediately — the work takes minutes; "
+            "poll get_job_status or pass webhook_url to be called back. The "
+            "caller must own the content or hold the rights to process it "
             "(confirm_rights)."
         ),
         "inputSchema": {
@@ -66,7 +75,9 @@ TOOLS = [
             "properties": {
                 "source_url": {
                     "type": "string",
-                    "description": "Public video URL (YouTube or a direct video file URL).",
+                    "description": "Public video URL, passed through exactly as the user gave it "
+                                   "(YouTube watch/short/live URL, or a direct video file URL). "
+                                   "The server does the downloading.",
                 },
                 "confirm_rights": {
                     "type": "boolean",
