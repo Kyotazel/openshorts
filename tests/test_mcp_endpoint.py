@@ -106,7 +106,9 @@ class TestCloudModeAuth:
         monkeypatch.setenv("BILLING_ENABLED", "1")
         resp = _post({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}})
         assert resp.status_code == 401
-        assert resp.headers.get("www-authenticate") == "Bearer"
+        # OAuth-capable clients discover the login flow from this header.
+        assert resp.headers.get("www-authenticate").startswith("Bearer resource_metadata=")
+        assert "/.well-known/oauth-protected-resource" in resp.headers.get("www-authenticate")
         assert "osk_" in resp.json()["error"]  # the fix is named in the message
 
     def test_resolvable_user_passes(self, monkeypatch):

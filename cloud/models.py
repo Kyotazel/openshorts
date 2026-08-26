@@ -255,3 +255,34 @@ class AccountDeletion(Base):
     r2_objects_deleted = Column(Integer, nullable=True)
     reason = Column(String(32), nullable=True)           # one of account.DELETION_REASONS
     deleted_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class OAuthClient(Base):
+    """An MCP client registered through OAuth dynamic client registration
+    (RFC 7591): claude.ai, ChatGPT, Cursor... They are public clients (no
+    secret): PKCE is what ties the authorization code to the party that
+    started the flow. Rows are not user-owned — one registration serves every
+    user of that client — so they survive account erasure."""
+    __tablename__ = "oauth_clients"
+    id = Column(Text, primary_key=True)               # client_id
+    client_name = Column(Text, nullable=False)
+    redirect_uris = Column(Text, nullable=False)      # JSON list
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class OAuthCode(Base):
+    """A short-lived authorization code (10 min, single use). Only its sha256
+    is stored; the code itself travels once, in the redirect back to the
+    client. Redeeming it mints an ``osk_`` API key for the user, which is what
+    the client keeps as its access token: the key shows up in the account
+    page like any other, and revoking it there disconnects the client."""
+    __tablename__ = "oauth_codes"
+    code_hash = Column(Text, primary_key=True)
+    client_id = Column(Text, ForeignKey("oauth_clients.id", ondelete="CASCADE"), nullable=False)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"),
+                     nullable=False, index=True)
+    redirect_uri = Column(Text, nullable=False)
+    code_challenge = Column(Text, nullable=False)
+    scope = Column(Text, nullable=True)
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    used_at = Column(DateTime(timezone=True), nullable=True)

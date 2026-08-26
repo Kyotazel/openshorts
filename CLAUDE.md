@@ -203,6 +203,19 @@ se desactiva porque el modelo diga `none`.
   back into this same app in-process (`httpx.ASGITransport`) forwarding the
   caller's auth headers, so it can never drift from the REST behavior. Cloud
   mode 401s without a resolvable user; self-host stays BYOK-open.
+- **OAuth for MCP clients** (`cloud/mcp_oauth.py`, cloud mode only): claude.ai
+  and ChatGPT connect by URL, so the server publishes RFC 9728/8414 metadata
+  under `/.well-known/`, accepts dynamic client registration (`POST
+  /oauth/register`, public clients, PKCE S256 mandatory) and bounces
+  `GET /oauth/authorize` to the dashboard consent screen (`#/oauth/authorize`),
+  because the session JWT lives in localStorage on the frontend host and a
+  bare API GET cannot see it. `POST /api/oauth/authorize` (session auth) mints
+  the code; `POST /oauth/token` redeems it by **minting an ordinary `osk_`
+  key** named after the client and returning it as the access token. No new
+  auth path, no refresh tokens: the key shows up in Account → API keys and
+  revoking it disconnects the app. The `/mcp` 401 carries
+  `WWW-Authenticate: Bearer resource_metadata=...` so clients find the flow.
+  `oauth_codes` is in `USER_OWNED_TABLES`; `oauth_clients` deliberately not.
 - **Webhooks**: `POST /api/process` takes `webhook_url` + optional
   `webhook_secret` (HMAC-SHA256, `X-OpenShorts-Signature`). Validated with
   `security_utils.assert_public_url` at submit AND at delivery (DNS rebinding).

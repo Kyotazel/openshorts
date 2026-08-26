@@ -4,6 +4,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { apiJson } from '../lib/api';
 import { track } from '../lib/analytics';
 import ApiKeysCard from './ApiKeysCard';
+import McpConnectCard from './McpConnectCard';
 import DeleteAccountCard from './DeleteAccountCard';
 import SocialAnalyticsCard from './SocialAnalyticsCard';
 
@@ -202,6 +203,8 @@ export default function AccountPage() {
           </div>
         </div>
       )}
+
+      <McpConnectCard cloud />
 
       <ApiKeysCard />
 

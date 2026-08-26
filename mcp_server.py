@@ -527,11 +527,17 @@ async def _authorized(request: Request) -> bool:
 @router.post("/mcp")
 async def mcp_endpoint(request: Request):
     if not await _authorized(request):
+        # OAuth-capable clients (claude.ai, ChatGPT) read resource_metadata off
+        # this header and run the login flow themselves; everyone else gets the
+        # API-key hint in the body.
+        from cloud import mcp_oauth
+        u = request.base_url
         return JSONResponse(
-            {"error": "Authentication required. Pass an OpenShorts API key: "
-                      "Authorization: Bearer osk_... (create one in the dashboard)."},
+            {"error": "Authentication required. Connect with OAuth (claude.ai, ChatGPT) "
+                      "or pass an OpenShorts API key: Authorization: Bearer osk_... "
+                      "(create one in the dashboard)."},
             status_code=401,
-            headers={"WWW-Authenticate": "Bearer"},
+            headers={"WWW-Authenticate": mcp_oauth.www_authenticate(f"{u.scheme}://{u.netloc}")},
         )
     try:
         msg = json.loads(await request.body())

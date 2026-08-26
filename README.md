@@ -303,8 +303,10 @@ You don't need the dashboard. The whole pipeline is callable by AI agents and sc
 
 OpenShorts ships a built-in [MCP](https://modelcontextprotocol.io) server, so Claude, ChatGPT, Cursor or any MCP client can clip and publish videos for you:
 
+**claude.ai and ChatGPT**: paste `https://mcp.openshorts.app/mcp` as a custom connector (Settings → Connectors) and approve the access on openshorts.app. The server does OAuth 2.1 with dynamic client registration, so there is no key to copy; the connection shows up under Account → API keys, where revoking it disconnects the app.
+
 ```bash
-# Hosted (create an API key in your account page at openshorts.app):
+# Claude Code / Cursor / n8n (hosted): create an API key in your account page
 claude mcp add --transport http openshorts https://mcp.openshorts.app/mcp \
   --header "Authorization: Bearer osk_..."
 

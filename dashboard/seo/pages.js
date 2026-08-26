@@ -1045,17 +1045,25 @@ YouTube URL, turn it into 3 to 15 vertical clips with word-level captions,
 restyle those captions, and publish or schedule the result to TikTok, Instagram
 Reels and YouTube Shorts.</p>
 
-<h2>How do I connect Claude or another MCP client?</h2>
+<h2>How do I connect Claude or ChatGPT?</h2>
+<p>With the URL alone. The server implements OAuth 2.1 with dynamic client
+registration, which is what claude.ai and ChatGPT expect from a remote MCP
+server, so there is no key to copy:</p>
 <ol>
-<li>Sign in at openshorts.app and create an API key in your account page. The key is shown once and starts with <code>osk_</code>.</li>
-<li>Add the server to your client. With Claude Code:</li>
+<li><strong>claude.ai:</strong> Settings, Connectors, Add custom connector, paste <code>https://mcp.openshorts.app/mcp</code>, Connect.</li>
+<li><strong>ChatGPT:</strong> Settings, Connectors, Create, paste the same URL, choose OAuth.</li>
+<li>Approve the access on openshorts.app (sign in if you are not). The 7 tools appear in every chat, and the connection is listed under Account, API keys, where revoking it disconnects the app.</li>
 </ol>
+<h2>How do I connect Claude Code, Cursor or n8n?</h2>
+<p>CLI and workflow clients take an API key instead: create one in your account
+page (shown once, starts with <code>osk_</code>) and pass it as a Bearer
+token. With Claude Code:</p>
 <pre><code>claude mcp add --transport http openshorts https://mcp.openshorts.app/mcp \\
   --header "Authorization: Bearer osk_..."</code></pre>
 <p>Any client that speaks Streamable HTTP works the same way: the endpoint is
-<code>https://mcp.openshorts.app/mcp</code> and the key travels as a Bearer
-token. The server describes itself over the protocol, tool schemas included, so
-there is nothing else to configure.</p>
+<code>https://mcp.openshorts.app/mcp</code>, the server describes itself over
+the protocol, tool schemas included, and the account page has copy-ready
+snippets for Claude Desktop, Cursor, n8n and curl.</p>
 
 <h2>What tools does the MCP server expose?</h2>
 <table>

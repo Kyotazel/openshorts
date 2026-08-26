@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Upload, Sparkles, Youtube, Instagram, Share2, ChevronDown, Check, Activity, LayoutDashboard, Settings, Plus, History, X, Terminal, Shield, LayoutGrid, Image, Globe, RotateCcw, Calendar, AlertTriangle, KeyRound, Bot, Users, Smartphone, ExternalLink, Copy, CheckCircle2, Mail, Loader2, Download, Menu } from 'lucide-react';
 import KeyInput from './components/KeyInput';
 import MediaInput from './components/MediaInput';
+import McpConnectCard from './components/McpConnectCard';
 import ResultCard from './components/ResultCard';
 import ProcessingAnimation from './components/ProcessingAnimation';
 // import Gallery from './components/Gallery';
@@ -1221,6 +1222,9 @@ function App() {
                   <Shield size={12} className="text-ok shrink-0" /> Privacy: keys only live in your browser (sent to backend just to process)
                 </div>
               </div>
+              {/* Self-hosted installs have no account page, so the agent
+                  how-to lives here; cloud users get it (with OAuth) in Account. */}
+              {!billingEnabled && <div className="mb-6"><McpConnectCard cloud={false} /></div>}
               {isManaged ? (
                 <div className="card p-6 mb-2">
                   <div className="flex items-center justify-between mb-3">
@@ -1614,6 +1618,18 @@ function App() {
                   </h1>
                   <p className="text-muted text-[15px] sm:text-lg leading-snug sm:leading-normal max-w-sm sm:max-w-none mx-auto">
                     Drop your long-form video below to instantly generate viral clips with AI.
+                  </p>
+                  {/* The same pipeline is an MCP server: point people at the
+                      one place that explains how to drive it from an agent. */}
+                  <p className="text-xs text-muted">
+                    Or let an agent do it:{' '}
+                    <a
+                      href={billingEnabled ? '#/account' : '#app'}
+                      onClick={(e) => { if (!billingEnabled) { e.preventDefault(); setActiveTab('settings'); } }}
+                      className="text-ink2 underline underline-offset-2 hover:text-brass transition-colors"
+                    >
+                      connect Claude, ChatGPT or n8n →
+                    </a>
                   </p>
                 </div>
 
