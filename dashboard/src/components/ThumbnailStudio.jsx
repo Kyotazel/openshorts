@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef, useCallback, useEffect } from 'react';
 import { Upload, Image, Loader2, Send, Check, Download, ArrowRight, ArrowLeft, Sparkles, Video, Type, X, Plus, MessageSquare, FileText, Youtube, AlertCircle, Settings } from 'lucide-react';
 import { getApiUrl } from '../config';
 import { apiFetch } from '../lib/api';
@@ -92,12 +92,16 @@ export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUse
   const [chatHistory, setChatHistory] = useState([]);
   const [isRefining, setIsRefining] = useState(false);
   const [recommended, setRecommended] = useState([]); // [{index, reason}]
+  const [thumbnailTexts, setThumbnailTexts] = useState([]); // hook text paired with each title
 
   // Step 3 state
   const [faceImage, setFaceImage] = useState(null);
   const [bgImage, setBgImage] = useState(null);
   const [extraPrompt, setExtraPrompt] = useState('');
   const [thumbnailCount, setThumbnailCount] = useState(3);
+  const [burnText, setBurnText] = useState(true); // crisp PIL text vs model-rendered text
+  const [frames, setFrames] = useState(null); // null = not fetched yet
+  const [selectedFrame, setSelectedFrame] = useState(null);
   const [isGenerating, setIsGenerating] = useState(false);
   const [generatedThumbnails, setGeneratedThumbnails] = useState([]);
 
@@ -176,6 +180,7 @@ export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUse
       const data = await res.json();
       setSessionId(data.session_id);
       setTitles(data.titles || []);
+      setThumbnailTexts(data.thumbnail_texts || []);
       setRecommended(data.recommended || []);
       setChatHistory([{
         role: 'assistant',
@@ -240,6 +245,8 @@ export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUse
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json();
       setTitles(data.titles || []);
+      setThumbnailTexts([]);
+      setRecommended([]);
       setChatHistory(prev => [...prev, {
         role: 'assistant',
         content: `Here are refined titles based on your feedback. Click one to select it.`
@@ -270,6 +277,8 @@ export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUse
       formData.append('title', finalTitle);
       formData.append('extra_prompt', extraPrompt);
       formData.append('count', thumbnailCount);
+      formData.append('burn_text', burnText ? 'true' : 'false');
+      if (selectedFrame && !faceImage) formData.append('frame', selectedFrame);
       if (faceImage) formData.append('face', faceImage);
       if (bgImage) formData.append('background', bgImage);
 
@@ -295,6 +304,19 @@ export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUse
       setIsGenerating(false);
     }
   };
+
+  // Frames with a big, sharp face from the uploaded video: one click replaces
+  // the face upload nobody makes. Fetched once when the generate step opens.
+  useEffect(() => {
+    if (step !== 2 || mode !== 'video' || !sessionId || frames !== null) return;
+    let cancelled = false;
+    setFrames([]);
+    apiFetch(`/api/thumbnail/frames/${sessionId}`)
+      .then(res => (res.ok ? res.json() : { frames: [] }))
+      .then(data => { if (!cancelled) setFrames(data.frames || []); })
+      .catch(() => { if (!cancelled) setFrames([]); });
+    return () => { cancelled = true; };
+  }, [step, mode, sessionId, frames]);
 
   const handleDownload = async (url) => {
     try {
@@ -420,6 +442,9 @@ export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUse
     setChatInput('');
     setChatHistory([]);
     setFaceImage(null);
+    setFrames(null);
+    setSelectedFrame(null);
+    setThumbnailTexts([]);
     setBgImage(null);
     setExtraPrompt('');
     setGeneratedThumbnails([]);
@@ -684,6 +709,9 @@ export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUse
                             {rec && (
                               <p className="text-xs text-muted mt-1.5 leading-relaxed">{rec.reason}</p>
                             )}
+                            {thumbnailTexts[i] && (
+                              <p className="readout mt-1.5">thumbnail: {thumbnailTexts[i]}</p>
+                            )}
                           </div>
                         </div>
                       </button>
@@ -721,6 +749,36 @@ export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUse
                 </button>
               </div>
 
+              {mode === 'video' && frames !== null && (
+                <div className="card p-6 space-y-3">
+                  <p className="eyebrow">YOUR FACE FROM THE VIDEO</p>
+                  {frames.length === 0 ? (
+                    <p className="text-xs text-muted lowercase">Looking for sharp frames with a face...</p>
+                  ) : (
+                    <>
+                      <div className="grid grid-cols-3 gap-2">
+                        {frames.map((f) => (
+                          <button
+                            key={f.url}
+                            type="button"
+                            onClick={() => setSelectedFrame(selectedFrame === f.url ? null : f.url)}
+                            className={`relative rounded-input overflow-hidden border-2 transition-colors ${selectedFrame === f.url ? 'border-brass' : 'border-transparent hover:border-rule2'}`}
+                          >
+                            <img src={getApiUrl(f.url)} alt="" className="w-full aspect-video object-cover" />
+                            <span className="absolute bottom-1 right-1 readout bg-black/60 text-white px-1 rounded">
+                              {Math.floor(f.time / 60)}:{String(Math.floor(f.time % 60)).padStart(2, '0')}
+                            </span>
+                          </button>
+                        ))}
+                      </div>
+                      <p className="text-xs text-muted lowercase">
+                        {selectedFrame ? 'This frame is the person reference (a photo upload below overrides it).' : 'Pick a frame so the thumbnail shows you, not a stranger.'}
+                      </p>
+                    </>
+                  )}
+                </div>
+              )}
+
               <div className="card p-6 space-y-4">
                 <p className="eyebrow">FACE IMAGE · OPTIONAL</p>
                 <DragDropZone
@@ -753,6 +811,19 @@ export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUse
                   placeholder="e.g. Use red and black colors, dramatic lighting, include money emojis..."
                   className="input-field text-sm resize-none h-20"
                 />
+              </div>
+
+              <div className="card p-6 space-y-4">
+                <p className="eyebrow">TEXT ON THUMBNAIL</p>
+                <SegmentedControl
+                  options={[{ value: true, label: 'Crisp' }, { value: false, label: 'AI painted' }]}
+                  value={burnText}
+                  onChange={setBurnText}
+                  size="sm"
+                />
+                <p className="text-xs text-muted lowercase">
+                  {burnText ? 'Text is set in a bold font after the image is painted: always spelled right.' : 'The image model paints the text itself: more integrated, sometimes misspelled.'}
+                </p>
               </div>
 
               <div className="card p-6 space-y-4">
@@ -791,9 +862,11 @@ export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUse
                 <div className="space-y-4">
                   <p className="text-sm lowercase text-muted">Generated Thumbnails — click to select for publishing</p>
                   <div className="grid gap-4">
-                    {generatedThumbnails.map((url, i) => (
+                    {generatedThumbnails.map((thumb, i) => {
+                      const url = thumb.url;
+                      return (
                       <div
-                        key={i}
+                        key={url}
                         onClick={() => setSelectedThumbnail(url)}
                         className={`glass-panel overflow-hidden group relative cursor-pointer transition-colors duration-200 ${selectedThumbnail === url ? 'border-2 border-brass' : ''
                           }`}
@@ -812,22 +885,42 @@ export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUse
                             Download
                           </button>
                         </div>
-                        <div className="p-3 flex items-center justify-between">
-                          <span className="text-xs lowercase text-muted flex items-center gap-2">
-                            Thumbnail {i + 1}
-                            {selectedThumbnail === url && (
-                              <span className="text-brass flex items-center gap-1"><Check size={10} /> Selected</span>
-                            )}
-                          </span>
+                        <div className="p-3 flex items-center justify-between gap-3">
+                          <div className="min-w-0">
+                            <span className="text-xs lowercase text-muted flex items-center gap-2">
+                              Thumbnail {i + 1}{thumb.text ? ` · "${thumb.text}"` : ''}
+                              {selectedThumbnail === url && (
+                                <span className="text-brass flex items-center gap-1"><Check size={10} /> Selected</span>
+                              )}
+                            </span>
+                            {thumb.why && <p className="text-xs text-muted mt-1 truncate">{thumb.why}</p>}
+                          </div>
                           <button
                             onClick={(e) => { e.stopPropagation(); handleDownload(url); }}
-                            className="text-xs lowercase text-muted hover:text-ink transition-colors flex items-center gap-1"
+                            className="text-xs lowercase text-muted hover:text-ink transition-colors flex items-center gap-1 shrink-0"
                           >
                             <Download size={12} /> Save
                           </button>
                         </div>
                       </div>
-                    ))}
+                      );
+                    })}
+                  </div>
+
+                  {/* How it reads in the feed on a phone, where the click is decided */}
+                  <div className="card p-4 space-y-3">
+                    <p className="eyebrow">PHONE PREVIEW</p>
+                    <div className="space-y-3">
+                      {generatedThumbnails.map((thumb) => (
+                        <div key={thumb.url} className="flex gap-3 items-start">
+                          <img src={getApiUrl(thumb.url)} alt="" className="w-[168px] h-[94px] object-cover rounded-input shrink-0" />
+                          <div className="min-w-0">
+                            <p className="text-sm text-ink leading-snug line-clamp-2">{selectedTitle || manualTitle}</p>
+                            <p className="text-xs text-muted mt-1">Your channel · 1.2K views · 2 hours ago</p>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
                   </div>
 
                   {/* Regenerate */}

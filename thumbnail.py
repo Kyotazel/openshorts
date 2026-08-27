@@ -1,21 +1,71 @@
+import io
 import os
 import uuid
-import time
 import json
+from concurrent.futures import ThreadPoolExecutor
+
 from google import genai
 from google.genai import types
+from PIL import Image, ImageDraw, ImageFont, ImageFilter
 
-# Text/analysis model (title, description, tags). The image model below stays
-# on gemini-3.1-flash-image-preview — flash-lite cannot generate images.
-TEXT_MODEL = os.environ.get("GEMINI_MODEL_THUMBNAIL") or os.environ.get("GEMINI_MODEL") or "gemini-3.1-flash-lite"
-from PIL import Image
+# Text/analysis model (titles, concepts, description). Deliberately NOT tied to
+# GEMINI_MODEL: the pipeline runs flash-lite for a closed-choice layout pick,
+# but titles are the one place where the creative gap between lite and flash
+# shows, and ten titles per video cost cents either way. The image model
+# stays on gemini-3.1-flash-image; the text models cannot draw.
+TEXT_MODEL = os.environ.get("GEMINI_MODEL_THUMBNAIL") or "gemini-3.5-flash"
+IMAGE_MODEL = os.environ.get("GEMINI_IMAGE_MODEL") or "gemini-3.1-flash-image"
 
+# Frames sent with the transcript instead of the whole video. Gemini bills
+# video at ~300 tokens/s, so an hour is ~1M tokens for what is a text task;
+# ten 1024px frames cost ~3k tokens however long the source runs.
+TITLE_FRAMES = 10
+TITLE_FRAME_WIDTH = 1024
+
+# YouTube shows ~50 characters of a title on a phone before cutting it.
+TITLE_MOBILE_CHARS = 50
+TITLE_MAX_CHARS = 65
+
+THUMB_W, THUMB_H = 1280, 720
+THUMB_MAX_BYTES = 2 * 1024 * 1024  # YouTube's upload limit
+THUMB_FONT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts", "Anton-Regular.ttf")
+TEXT_POSITIONS = ("left", "right", "top", "bottom")
+
+
+def _parse_json(text):
+    """Gemini JSON, tolerant of code fences and prose around the object."""
+    text = (text or "").strip()
+    start = text.find("{")
+    if start == -1:
+        raise json.JSONDecodeError("no object", text, 0)
+    # raw_decode stops at the end of the first complete object, so a model
+    # that appends a stray "]}" (seen with flash) does not break the parse.
+    obj, _ = json.JSONDecoder().raw_decode(text[start:])
+    return obj
+
+
+def _frame_parts(video_path, n=TITLE_FRAMES, width=TITLE_FRAME_WIDTH):
+    """Evenly spaced frames as Gemini image parts (empty list on any failure)."""
+    try:
+        from layout_picker import sample_frames
+        return [types.Part.from_bytes(data=b, mime_type="image/jpeg")
+                for b in sample_frames(video_path, n=n, width=width)]
+    except Exception as e:
+        print(f"⚠️ [Thumbnail] Could not sample frames: {e}")
+        return []
+
+
+# ---------------------------------------------------------------------------
+# Titles
+# ---------------------------------------------------------------------------
 
 def analyze_video_for_titles(api_key, video_path, transcript=None):
     """
-    Transcribes a video and uses Gemini to suggest viral YouTube titles.
-    If transcript is provided, skips Whisper transcription.
-    Returns: { "titles": [...], "transcript_summary": "...", "language": "...", "segments": [...], "video_duration": ... }
+    Suggests YouTube titles from the transcript plus a handful of frames.
+    Two calls: a wide brainstorm, then a critic that scores and picks a
+    diverse top 10 and pairs each title with a 1-4 word thumbnail hook.
+    Returns: { "titles", "thumbnail_texts", "transcript_summary", "language",
+               "segments", "video_duration", "recommended" }
     """
     if transcript is None:
         from main import transcribe_video
@@ -24,92 +74,123 @@ def analyze_video_for_titles(api_key, video_path, transcript=None):
     else:
         print("🎬 [Thumbnail] Using pre-computed transcript (Whisper already done)...")
 
-    print("📤 [Thumbnail] Uploading video to Gemini...")
     client = genai.Client(api_key=api_key)
+    frames = _frame_parts(video_path)
+    language = transcript.get("language", "en")
+    segments = transcript.get("segments", [])
+    video_duration = segments[-1]["end"] if segments else 0
+    # Enough transcript for a title; a 3-hour podcast does not need all of it.
+    transcript_text = transcript.get("text", "")[:60000]
 
-    file_upload = client.files.upload(file=video_path)
-    while True:
-        file_info = client.files.get(name=file_upload.name)
-        if file_info.state == "ACTIVE":
-            break
-        elif file_info.state == "FAILED":
-            raise Exception("Video processing failed by Gemini.")
-        time.sleep(2)
+    brainstorm_prompt = f"""You are a YouTube packaging expert (titles + thumbnails) for a channel that wants maximum CTR without lying.
 
-    prompt = f"""You are a YouTube title expert who creates viral, click-worthy titles.
+The images are frames sampled evenly across the video. The transcript is below.
 
-Analyze this video and its transcript, then suggest 10 YouTube titles that would maximize CTR (click-through rate).
+TRANSCRIPT (language: {language}):
+{transcript_text}
 
-TRANSCRIPT:
-{transcript['text']}
+TASK 1: Summarize the video in 2-3 sentences (what it is, who it is for, the single most surprising or valuable point).
 
-RULES:
-- Titles must be under 70 characters
-- Use power words, curiosity gaps, and emotional triggers
-- Mix styles: how-to, listicle, story-driven, controversial, question-based
-- Make them specific to the actual content, not generic
-- Include numbers where appropriate
-- Consider the language of the video (detected: {transcript['language']})
-- Titles should be in the SAME LANGUAGE as the video transcript
+TASK 2: Brainstorm 25 candidate titles. Cover ALL of these styles, at least 3 each:
+- specific outcome / result ("I did X and Y happened")
+- curiosity gap (withhold the key fact, never clickbait the video does not pay off)
+- contrarian / myth-busting
+- how-to with a concrete promise
+- number / list
+- question the viewer already asks themselves
+- story / confession
 
-Also provide a brief summary of the video content (2-3 sentences).
-
-After generating all 10 titles, pick the TOP 2 you most recommend and explain concisely WHY (CTR potential, emotional hook, uniqueness, etc.). Reference them by their 0-based index in the titles array.
+TITLE RULES:
+- Write in the SAME LANGUAGE as the transcript ({language}). Never translate.
+- Ideal length {TITLE_MOBILE_CHARS} characters or less; hard maximum {TITLE_MAX_CHARS}. Phones cut titles after ~{TITLE_MOBILE_CHARS} characters, so the payoff must land inside the first {TITLE_MOBILE_CHARS}.
+- Put the main keyword / subject in the first 3 words.
+- Be specific to THIS video: names, numbers, tools, places from the transcript. Nothing generic.
+- No ALL CAPS words, at most one exclamation mark, no emojis.
 
 OUTPUT JSON:
 {{
-    "titles": ["title1", "title2", ...],
-    "transcript_summary": "Brief summary of the video content...",
-    "language": "{transcript['language']}",
-    "recommended": [
-        {{"index": 0, "reason": "Why this title is best..."}},
-        {{"index": 3, "reason": "Why this title is second best..."}}
-    ]
+  "transcript_summary": "...",
+  "candidates": ["title", ...]
 }}"""
 
-    print("🤖 [Thumbnail] Asking Gemini for title suggestions...")
+    print("🤖 [Thumbnail] Brainstorming titles...")
     response = client.models.generate_content(
         model=TEXT_MODEL,
-        contents=[file_upload, prompt],
-        config=types.GenerateContentConfig(
-            response_mime_type="application/json"
-        )
+        contents=frames + [brainstorm_prompt],
+        config=types.GenerateContentConfig(response_mime_type="application/json"),
     )
-
-    # Extract segments and duration from transcript for later use
-    segments = transcript.get("segments", [])
-    video_duration = segments[-1]["end"] if segments else 0
-
     try:
-        text = response.text.strip()
-        if text.startswith("```json"):
-            text = text[7:]
-        if text.startswith("```"):
-            text = text[3:]
-        if text.endswith("```"):
-            text = text[:-3]
-        text = text.strip()
-
-        start_idx = text.find('{')
-        end_idx = text.rfind('}')
-        if start_idx != -1 and end_idx != -1:
-            text = text[start_idx:end_idx + 1]
-
-        result = json.loads(text)
-        result["transcript_summary"] = result.get("transcript_summary", "")
-        result["language"] = result.get("language", transcript["language"])
-        result["segments"] = segments
-        result["video_duration"] = video_duration
-        return result
-    except json.JSONDecodeError:
-        print(f"❌ [Thumbnail] Failed to parse titles JSON: {response.text}")
+        draft = _parse_json(response.text)
+    except (json.JSONDecodeError, AttributeError):
+        print(f"❌ [Thumbnail] Failed to parse brainstorm JSON: {getattr(response, 'text', '')}")
         return {
             "titles": ["Could not generate titles - please try again"],
-            "transcript_summary": transcript["text"][:500],
-            "language": transcript["language"],
+            "thumbnail_texts": [],
+            "transcript_summary": transcript.get("text", "")[:500],
+            "language": language,
             "segments": segments,
-            "video_duration": video_duration
+            "video_duration": video_duration,
+            "recommended": [],
         }
+
+    summary = draft.get("transcript_summary", "")
+    candidates = [c for c in draft.get("candidates", []) if isinstance(c, str) and c.strip()]
+
+    critic_prompt = f"""You are a ruthless YouTube title critic. Below are candidate titles for one video.
+
+VIDEO SUMMARY: {summary}
+LANGUAGE: {language}
+
+CANDIDATES:
+{json.dumps(candidates, ensure_ascii=False, indent=2)}
+
+Score every candidate 1-10 on each of: specificity (concrete to this video), curiosity (makes you need to click), clarity (understood in 1 second on a phone), honesty (the video delivers it). Reject anything over {TITLE_MAX_CHARS} characters or whose hook lands after character {TITLE_MOBILE_CHARS}.
+
+Then return the 10 best, ordered best first, with NO two titles using the same angle (different styles, different hooks). You may lightly edit a title to fix length or sharpen it, keeping the language ({language}).
+
+For each of the 10, write the THUMBNAIL TEXT: 1-4 words, ALL CAPS, in {language}, that COMPLEMENTS the title instead of repeating it (the title says what, the thumbnail says the emotion, the number or the twist). Examples of the relationship: title "How I got 10k subscribers in 30 days" -> thumbnail "0 TO 10K"; title "Por qué dejé mi trabajo en Google" -> thumbnail "ME FUI".
+
+Pick the top 2 and explain in one sentence each why they will win the click.
+
+OUTPUT JSON:
+{{
+  "titles": ["...", ... 10 items],
+  "thumbnail_texts": ["...", ... 10 items, same order],
+  "recommended": [
+    {{"index": 0, "reason": "..."}},
+    {{"index": 3, "reason": "..."}}
+  ]
+}}"""
+
+    print("🧐 [Thumbnail] Scoring titles...")
+    response = client.models.generate_content(
+        model=TEXT_MODEL,
+        contents=[critic_prompt],
+        config=types.GenerateContentConfig(response_mime_type="application/json"),
+    )
+    try:
+        picked = _parse_json(response.text)
+        titles = [t for t in picked.get("titles", []) if isinstance(t, str) and t.strip()]
+        if not titles:
+            raise ValueError("no titles")
+    except (json.JSONDecodeError, AttributeError, ValueError):
+        print(f"⚠️ [Thumbnail] Critic failed, falling back to the brainstorm: {getattr(response, 'text', '')[:300]}")
+        titles = candidates[:10]
+        picked = {"thumbnail_texts": [], "recommended": []}
+
+    thumbnail_texts = [str(t) for t in picked.get("thumbnail_texts", [])][:len(titles)]
+    thumbnail_texts += [""] * (len(titles) - len(thumbnail_texts))
+    return {
+        "titles": titles,
+        "thumbnail_texts": thumbnail_texts,
+        "transcript_summary": summary,
+        "language": language,
+        "segments": segments,
+        "video_duration": video_duration,
+        "recommended": [r for r in picked.get("recommended", [])
+                        if isinstance(r, dict) and isinstance(r.get("index"), int)
+                        and 0 <= r["index"] < len(titles)],
+    }
 
 
 def refine_titles(api_key, context, user_message, conversation_history=None):
@@ -135,11 +216,11 @@ USER'S NEW REQUEST:
 {user_message}
 
 RULES:
-- Titles must be under 70 characters
-- Incorporate the user's feedback/direction
-- Keep titles viral and click-worthy
-- If the user asks for a specific style, follow it
-- Titles should be in the same language as the original content
+- Ideal length {TITLE_MOBILE_CHARS} characters or less, hard maximum {TITLE_MAX_CHARS} (phones cut after ~{TITLE_MOBILE_CHARS})
+- Main keyword / subject in the first 3 words
+- Incorporate the user's feedback/direction; if they ask for a style, follow it
+- Specific to this video (names, numbers, tools), never generic
+- Same language as the original content
 
 OUTPUT JSON:
 {{
@@ -155,127 +236,387 @@ OUTPUT JSON:
     )
 
     try:
-        text = response.text.strip()
-        if text.startswith("```json"):
-            text = text[7:]
-        if text.startswith("```"):
-            text = text[3:]
-        if text.endswith("```"):
-            text = text[:-3]
-        text = text.strip()
-
-        start_idx = text.find('{')
-        end_idx = text.rfind('}')
-        if start_idx != -1 and end_idx != -1:
-            text = text[start_idx:end_idx + 1]
-
-        return json.loads(text)
-    except json.JSONDecodeError:
+        return _parse_json(response.text)
+    except (json.JSONDecodeError, AttributeError):
         print(f"❌ [Thumbnail] Failed to parse refined titles: {response.text}")
         return {"titles": ["Could not refine titles - please try again"]}
 
 
-def generate_thumbnail(api_key, title, session_id, face_image_path=None, bg_image_path=None, extra_prompt="", count=3, video_context=""):
+# ---------------------------------------------------------------------------
+# Frames from the video
+# ---------------------------------------------------------------------------
+
+def extract_face_frames(video_path, session_id, n=5, samples=40):
     """
-    Generates YouTube thumbnails using Gemini image generation.
-    Returns list of saved image paths (relative URLs).
+    Frames from the video worth building a thumbnail on: a large, sharp face,
+    spread across the runtime so the user gets different moments, not five
+    near-duplicates of one second. Saved as JPEGs under the session's
+    thumbnails dir. Returns [{"url", "path", "time", "face": [x, y, w, h]}].
+    """
+    import cv2
+    from main import detect_face_candidates
+
+    out_dir = os.path.join("output", "thumbnails", session_id, "frames")
+    os.makedirs(out_dir, exist_ok=True)
+
+    cap = cv2.VideoCapture(video_path)
+    total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
+    scored = []
+    try:
+        if total <= 0:
+            return []
+        for i in range(samples):
+            idx = int((i + 0.5) * total / samples)
+            cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
+            ok, frame = cap.read()
+            if not ok:
+                continue
+            faces = detect_face_candidates(frame)
+            if not faces:
+                continue
+            x, y, w, h = max(faces, key=lambda f: f["score"])["box"]
+            fh, fw = frame.shape[:2]
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            scored.append(rank_frame(idx, idx / fps, frame, [x, y, w, h], (fw, fh),
+                                     cv2.Laplacian(gray, cv2.CV_64F).var()))
+    finally:
+        cap.release()
+
+    picked = pick_spread(scored, n, total)
+
+    results = []
+    for k, cand in enumerate(picked):
+        frame = cand["frame"]
+        fh, fw = frame.shape[:2]
+        scale = THUMB_W / float(fw)
+        resized = cv2.resize(frame, (THUMB_W, max(2, int(fh * scale))), interpolation=cv2.INTER_AREA)
+        path = os.path.join(out_dir, f"frame_{k + 1}.jpg")
+        cv2.imwrite(path, resized, [cv2.IMWRITE_JPEG_QUALITY, 90])
+        results.append({
+            "url": f"/thumbnails/{session_id}/frames/frame_{k + 1}.jpg",
+            "path": path,
+            "time": round(cand["time"], 1),
+            "face": [int(v * scale) for v in cand["face"]],
+        })
+    print(f"🖼️ [Thumbnail] {len(results)} face frames picked from {len(scored)} candidates")
+    return results
+
+
+def rank_frame(idx, time, frame, face_box, frame_size, sharpness):
+    """Score one candidate frame: face area, boosted by sharpness (capped so a
+    noisy frame cannot outrank a bigger face). None below 1% face area."""
+    x, y, w, h = face_box
+    fw, fh = frame_size
+    area = (w * h) / float(fw * fh)
+    if area < 0.01:
+        return None
+    return {
+        "idx": idx, "time": time, "frame": frame,
+        "face": [int(x), int(y), int(w), int(h)],
+        "score": area * (1.0 + min(sharpness, 500.0) / 500.0),
+    }
+
+
+def pick_spread(scored, n, total_frames, min_gap_fraction=0.04):
+    """Best-first, but every pick at least `min_gap_fraction` of the runtime
+    away from the others, returned in timeline order."""
+    scored = sorted((s for s in scored if s), key=lambda s: -s["score"])
+    picked = []
+    min_gap = total_frames * min_gap_fraction
+    for cand in scored:
+        if all(abs(cand["idx"] - p["idx"]) >= min_gap for p in picked):
+            picked.append(cand)
+        if len(picked) >= n:
+            break
+    picked.sort(key=lambda s: s["idx"])
+    return picked
+
+
+def _crop_face_reference(frame_path, face_box, out_path):
+    """Head-and-shoulders crop around the detected face, as a person reference
+    for the image model. Falls back to the whole frame without a box."""
+    img = Image.open(frame_path).convert("RGB")
+    if face_box:
+        x, y, w, h = face_box
+        cx, cy = x + w / 2, y + h / 2
+        side = max(w, h) * 2.4
+        left = max(0, int(cx - side / 2))
+        top = max(0, int(cy - side * 0.45))
+        right = min(img.width, int(cx + side / 2))
+        bottom = min(img.height, int(cy + side * 0.75))
+        img = img.crop((left, top, right, bottom))
+    img.save(out_path, quality=92)
+    return out_path
+
+
+# ---------------------------------------------------------------------------
+# Thumbnails
+# ---------------------------------------------------------------------------
+
+def plan_thumbnail_concepts(client, title, count, video_context="", extra_prompt="",
+                            thumbnail_text_hint="", has_person=False, language="en"):
+    """
+    One text call that designs `count` DIFFERENT thumbnails before any pixel is
+    drawn. Asking the image model to invent the concept and render it in one
+    go gives N variations of one idea; splitting it gives N ideas.
+    """
+    person_line = ("A real photo of the presenter is provided and MUST be the focal point, "
+                   "with an exaggerated, readable expression."
+                   if has_person else
+                   "No photo of the presenter is available: build the thumbnail around an object, "
+                   "a scene, a before/after, or a symbol; do NOT invent a specific person's face "
+                   "unless the user asks for one.")
+    hint_line = (f'\nSUGGESTED THUMBNAIL TEXT (use it for the first concept unless it is poor): "{thumbnail_text_hint}"'
+                 if thumbnail_text_hint else "")
+    extra_line = f"\nMANDATORY USER INSTRUCTIONS (override everything else):\n{extra_prompt}\n" if extra_prompt else ""
+    prompt = f"""You are a YouTube thumbnail art director. Design {count} DIFFERENT thumbnail concepts for this video.
+
+VIDEO TITLE: "{title}"
+LANGUAGE OF THE AUDIENCE: {language}
+VIDEO CONTEXT: {video_context or "(none)"}
+{person_line}{hint_line}{extra_line}
+Each concept must use a different device, e.g.: big face + huge text; before/after split; object hero shot; number as the hero; pointing at something; contrast of two things; "wrong vs right"; a red circle/arrow on a detail. No two concepts may share the same text or the same layout.
+
+Per concept give:
+- "text": 1-4 words, ALL CAPS, in {language}. Complements the title (the title says what, the text says the emotion, the number or the twist). Never repeat the title. No emoji.
+- "text_position": one of "left", "right", "top", "bottom" (where the text block sits; the subject goes on the opposite side).
+- "text_color": "white" or "yellow" (yellow for money/energy, white otherwise).
+- "scene": a precise image-generation prompt in English, 2-4 sentences: subject, expression/pose, background, lighting, colours, camera. Say that the text_position side is clean negative space (simple, dark or plain) so a headline can sit there. It must NOT ask for any text, letters, captions or logos in the image.
+- "why": one short sentence on why this earns the click.
+
+OUTPUT JSON:
+{{"concepts": [{{"text": "...", "text_position": "left", "text_color": "yellow", "scene": "...", "why": "..."}}, ...]}}"""
+
+    response = client.models.generate_content(
+        model=TEXT_MODEL,
+        contents=[prompt],
+        config=types.GenerateContentConfig(response_mime_type="application/json"),
+    )
+    try:
+        concepts = _parse_json(response.text).get("concepts", [])
+    except (json.JSONDecodeError, AttributeError):
+        print(f"⚠️ [Thumbnail] Concept JSON unreadable, using a generic concept: {getattr(response, 'text', '')[:200]}")
+        concepts = []
+    return normalise_concepts(concepts, count, title, thumbnail_text_hint)
+
+
+def normalise_concepts(concepts, count, title, thumbnail_text_hint=""):
+    """Clamp model output to what the renderer accepts and pad to `count`."""
+    cleaned = []
+    for c in concepts:
+        if not isinstance(c, dict) or not c.get("scene"):
+            continue
+        cleaned.append({
+            "text": str(c.get("text") or thumbnail_text_hint or "").strip().upper()[:40],
+            "text_position": c.get("text_position") if c.get("text_position") in TEXT_POSITIONS else "left",
+            "text_color": "yellow" if c.get("text_color") == "yellow" else "white",
+            "scene": str(c["scene"]),
+            "why": str(c.get("why", "")),
+        })
+    while len(cleaned) < count:
+        cleaned.append({
+            "text": thumbnail_text_hint.upper()[:40],
+            "text_position": "left",
+            "text_color": "white",
+            "scene": (f"A bold, high-contrast YouTube thumbnail scene for a video titled '{title}'. "
+                      "Dramatic lighting, vibrant colours, the left third is clean dark negative space."),
+            "why": "fallback",
+        })
+    return cleaned[:count]
+
+
+def _wrap_lines(draw, text, font, max_width):
+    words = text.split()
+    lines, cur = [], []
+    for w in words:
+        test = " ".join(cur + [w])
+        if draw.textlength(test, font=font) <= max_width or not cur:
+            cur.append(w)
+        else:
+            lines.append(" ".join(cur))
+            cur = [w]
+    if cur:
+        lines.append(" ".join(cur))
+    return lines
+
+
+def burn_thumbnail_text(img, text, position="left", color="white"):
+    """
+    Draw the hook text with PIL: Anton, heavy black stroke, drop shadow,
+    filling the chosen side of the canvas. Image models misspell accents and
+    split words; this never does.
+    """
+    text = (text or "").strip()
+    if not text:
+        return img
+    img = img.convert("RGBA")
+    W, H = img.size
+    horizontal = position in ("left", "right")
+    box_w = int(W * (0.46 if horizontal else 0.92))
+    box_h = int(H * (0.84 if horizontal else 0.40))
+    fill = (255, 221, 0, 255) if color == "yellow" else (255, 255, 255, 255)
+
+    draw = ImageDraw.Draw(img)
+    size = int(H * 0.30)
+    while True:
+        font = ImageFont.truetype(THUMB_FONT, size)
+        lines = _wrap_lines(draw, text, font, box_w)
+        # Anton's accents sit above the cap height: 1.15 keeps a tilde on
+        # line 2 off the baseline of line 1.
+        line_h = int(size * 1.15)
+        widest = max(draw.textlength(l, font=font) for l in lines)
+        if (len(lines) <= 3 and widest <= box_w and line_h * len(lines) <= box_h) or size <= 24:
+            break
+        size = int(size * 0.92)
+    stroke = max(4, size // 12)
+    total_h = line_h * len(lines)
+    # PIL draws from the ascender line; shift so the block is measured from the
+    # tallest glyph actually present (caps sit lower than accents).
+    top_pad = min(font.getbbox(l)[1] for l in lines)
+
+    if position == "left":
+        x0, y0 = int(W * 0.05), (H - total_h) // 2 - top_pad
+    elif position == "right":
+        x0, y0 = W - box_w - int(W * 0.05), (H - total_h) // 2 - top_pad
+    elif position == "top":
+        x0, y0 = int(W * 0.04), int(H * 0.05) - top_pad
+    else:
+        x0, y0 = int(W * 0.04), H - total_h - int(H * 0.06) - top_pad
+
+    def line_x(line):
+        return x0 if horizontal else (W - draw.textlength(line, font=font)) // 2
+
+    shadow = Image.new("RGBA", img.size, (0, 0, 0, 0))
+    sdraw = ImageDraw.Draw(shadow)
+    for i, line in enumerate(lines):
+        sdraw.text((line_x(line) + stroke, y0 + i * line_h + stroke * 1.5), line, font=font,
+                   fill=(0, 0, 0, 170), stroke_width=stroke, stroke_fill=(0, 0, 0, 170))
+    shadow = shadow.filter(ImageFilter.GaussianBlur(stroke))
+    img = Image.alpha_composite(img, shadow)
+    draw = ImageDraw.Draw(img)
+    for i, line in enumerate(lines):
+        draw.text((line_x(line), y0 + i * line_h), line, font=font, fill=fill,
+                  stroke_width=stroke, stroke_fill=(0, 0, 0, 255))
+    return img
+
+
+def finalize_thumbnail(img, out_path):
+    """Cover-crop to 1280x720 and save a JPEG under YouTube's 2 MB limit."""
+    img = img.convert("RGB")
+    scale = max(THUMB_W / img.width, THUMB_H / img.height)
+    img = img.resize((max(THUMB_W, int(img.width * scale + 0.5)),
+                      max(THUMB_H, int(img.height * scale + 0.5))), Image.LANCZOS)
+    left = (img.width - THUMB_W) // 2
+    top = (img.height - THUMB_H) // 2
+    img = img.crop((left, top, left + THUMB_W, top + THUMB_H))
+    for q in (92, 88, 84, 78, 70, 60):
+        img.save(out_path, "JPEG", quality=q, optimize=True)
+        if os.path.getsize(out_path) <= THUMB_MAX_BYTES:
+            break
+    return out_path
+
+
+def _generate_one(client, concept, reference_images, out_path, burn_text):
+    """One image call for one concept; returns the saved path or raises."""
+    if burn_text:
+        pos = concept['text_position']
+        share = "45% of the width" if pos in ("left", "right") else "40% of the height"
+        text_rule = ("Do NOT render any text, letters, numbers, captions, logos or watermarks anywhere "
+                     f"in the image. The {pos} {share} of the frame must be clean, simple negative space "
+                     "(plain, dark or softly blurred, no objects, no detail): a headline will be placed "
+                     "there afterwards. Put the subject and every object in the remaining part.")
+    else:
+        text_rule = (f'Render the text "{concept["text"]}" in huge bold condensed sans-serif capitals, '
+                     f'{concept["text_color"]} with a thick black outline, on the {concept["text_position"]} '
+                     "side, spelled EXACTLY as given. No other text.")
+    prompt = f"""Generate a professional YouTube thumbnail, 16:9.
+
+{concept['scene']}
+
+{text_rule}
+
+Style: high contrast, saturated colours, crisp subject separation, cinematic lighting, sharp focus on the subject, readable at 168x94 pixels. No clutter, no small details, no borders, no watermark."""
+    if reference_images:
+        prompt += "\nUse the provided photo(s) as the person / setting reference: same face, same features, keep them recognisable."
+
+    response = client.models.generate_content(
+        model=IMAGE_MODEL,
+        contents=reference_images + [prompt],
+        config=types.GenerateContentConfig(
+            response_modalities=["TEXT", "IMAGE"],
+            image_config=types.ImageConfig(aspect_ratio="16:9", image_size="2K"),
+        ),
+    )
+    for part in response.parts:
+        if part.text is not None:
+            print(f"📝 [Thumbnail] Gemini text: {part.text[:200]}")
+            continue
+        if part.inline_data is None or not part.inline_data.data:
+            continue
+        pil = Image.open(io.BytesIO(part.inline_data.data))
+        if burn_text:
+            pil = burn_thumbnail_text(pil, concept["text"], concept["text_position"], concept["text_color"])
+        return finalize_thumbnail(pil, out_path)
+    raise RuntimeError("Gemini returned no image")
+
+
+def generate_thumbnail(api_key, title, session_id, face_image_path=None, bg_image_path=None,
+                       extra_prompt="", count=3, video_context="", burn_text=True,
+                       thumbnail_text_hint="", language="en", frame_reference=None):
+    """
+    Generates `count` thumbnails, each from its own concept, in parallel.
+    frame_reference: {"path", "face"} from extract_face_frames, used as the
+    person reference when the user picked a frame instead of uploading a photo.
+    Returns [{"url", "text", "why"}] (only the ones that rendered).
     """
     client = genai.Client(api_key=api_key)
-
     output_dir = os.path.join("output", "thumbnails", session_id)
     os.makedirs(output_dir, exist_ok=True)
 
-    prompt_parts = []
-
-    # Add face image if provided
+    reference_images = []
     if face_image_path and os.path.exists(face_image_path):
-        face_img = Image.open(face_image_path)
-        prompt_parts.append(face_img)
-
-    # Add background image if provided
+        reference_images.append(Image.open(face_image_path))
+    elif frame_reference and os.path.exists(frame_reference.get("path", "")):
+        ref_path = os.path.join(output_dir, "person_reference.jpg")
+        _crop_face_reference(frame_reference["path"], frame_reference.get("face"), ref_path)
+        reference_images.append(Image.open(ref_path))
     if bg_image_path and os.path.exists(bg_image_path):
-        bg_img = Image.open(bg_image_path)
-        prompt_parts.append(bg_img)
+        reference_images.append(Image.open(bg_image_path))
 
-    # Build video context block
-    context_block = ""
-    if video_context:
-        context_block = f"""
-VIDEO CONTEXT (use this to understand the video and design a relevant thumbnail):
-{video_context}
-"""
+    concepts = plan_thumbnail_concepts(
+        client, title, count, video_context=video_context, extra_prompt=extra_prompt,
+        thumbnail_text_hint=thumbnail_text_hint, has_person=bool(reference_images), language=language)
+    for i, c in enumerate(concepts):
+        print(f"🎨 [Thumbnail] Concept {i + 1}: \"{c['text']}\" ({c['text_position']}) - {c['why']}")
 
-    # Build extra instructions block (high priority)
-    extra_block = ""
-    if extra_prompt:
-        extra_block = f"""
-⚠️ MANDATORY USER INSTRUCTIONS (MUST follow these exactly — they override any default behavior):
-{extra_prompt}
-"""
+    # Unique names per batch so a regenerate never serves a stale cached file.
+    batch = uuid.uuid4().hex[:6]
 
-    text_prompt = f"""Generate a professional, eye-catching YouTube thumbnail image.
-
-VIDEO TITLE (for reference — do NOT put the full title on the thumbnail): "{title}"
-{context_block}
-TEXT ON THE THUMBNAIL:
-- Based on the title AND the video context, create a SHORT visual hook: 1 to 5 words maximum
-- It should capture the core emotion, surprise, or promise of the video
-- The thumbnail text should COMPLEMENT the YouTube title (which appears below), not repeat it
-- Examples: "$10K EN 30 DÍAS", "ESTO FUNCIONA", "NO LO SABÍAS", "GRATIS 🔥"
-- Use ALL CAPS for maximum impact, split into 2-3 lines
-{extra_block}
-DESIGN REQUIREMENTS:
-- The text MUST be large, bold, and high-contrast (readable at small sizes)
-- Use vibrant, eye-catching colors that match the video's mood
-- Professional YouTube thumbnail aesthetic
-- Clean composition — text and face/subject as clear focal points
-- NO clutter, NO small text, NO watermarks"""
-
-    if face_image_path and os.path.exists(face_image_path):
-        text_prompt += "\n- Include the provided face/person prominently with an exaggerated expression (surprise, excitement, shock)"
-
-    if bg_image_path and os.path.exists(bg_image_path):
-        text_prompt += "\n- Use the provided background image as the base/backdrop"
-
-    prompt_parts.append(text_prompt)
-
-    thumbnails = []
-    last_error = None
-    for i in range(count):
-        print(f"🎨 [Thumbnail] Generating thumbnail {i + 1}/{count}...")
+    def run(i):
+        out_path = os.path.join(output_dir, f"thumb_{batch}_{i + 1}.jpg")
         try:
-            response = client.models.generate_content(
-                model="gemini-3.1-flash-image-preview",
-                contents=prompt_parts,
-                config=types.GenerateContentConfig(
-                    response_modalities=["TEXT", "IMAGE"],
-                    image_config=types.ImageConfig(
-                        aspect_ratio="16:9",
-                        image_size="2K"
-                    )
-                )
-            )
-
-            for part in response.parts:
-                if part.text is not None:
-                    print(f"📝 [Thumbnail] Gemini text: {part.text}")
-                elif image := part.as_image():
-                    filename = f"thumb_{i + 1}.jpg"
-                    filepath = os.path.join(output_dir, filename)
-                    image.save(filepath)
-                    thumbnails.append(f"/thumbnails/{session_id}/{filename}")
-                    print(f"✅ [Thumbnail] Saved: {filepath}")
-                    break
-
+            _generate_one(client, concepts[i], reference_images, out_path, burn_text)
+            print(f"✅ [Thumbnail] Saved: {out_path}")
+            return {"url": f"/thumbnails/{session_id}/{os.path.basename(out_path)}",
+                    "text": concepts[i]["text"], "why": concepts[i]["why"]}
         except Exception as e:
-            last_error = str(e)
             print(f"❌ [Thumbnail] Generation {i + 1} failed: {e}")
+            return {"error": str(e)}
 
-    if not thumbnails and last_error:
+    with ThreadPoolExecutor(max_workers=min(count, 4)) as pool:
+        results = list(pool.map(run, range(len(concepts))))
+
+    thumbnails = [r for r in results if "url" in r]
+    if not thumbnails:
+        last_error = next((r["error"] for r in results if "error" in r), "unknown")
         raise RuntimeError(f"All thumbnail generations failed. Last error: {last_error}")
-
     return thumbnails
 
+
+# ---------------------------------------------------------------------------
+# Description
+# ---------------------------------------------------------------------------
 
 def generate_youtube_description(api_key, title, transcript_segments, language, video_duration):
     """

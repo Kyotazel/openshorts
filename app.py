@@ -11,6 +11,7 @@ import time
 import zipfile
 import math
 import itertools
+import functools
 import asyncio
 import signal
 import socket
@@ -2516,7 +2517,8 @@ from editor import VideoEditor
 from subtitles import generate_srt, generate_ass, burn_subtitles, generate_srt_from_video
 from hooks import add_hook_to_video
 from translate import translate_video, get_supported_languages
-from thumbnail import analyze_video_for_titles, refine_titles, generate_thumbnail, generate_youtube_description
+from thumbnail import (analyze_video_for_titles, refine_titles, generate_thumbnail,
+                       generate_youtube_description, extract_face_frames)
 
 class EditRequest(BaseModel):
     job_id: str
@@ -4665,6 +4667,7 @@ async def thumbnail_analyze(
         thumbnail_sessions[session_id].update({
             "context": result.get("transcript_summary", ""),
             "titles": result.get("titles", []),
+            "thumbnail_texts": result.get("thumbnail_texts", []),
             "language": result.get("language", "en"),
             "conversation": thumbnail_sessions[session_id].get("conversation", []),
             "video_path": video_path,
@@ -4677,6 +4680,7 @@ async def thumbnail_analyze(
         return {
             "session_id": session_id,
             "titles": result.get("titles", []),
+            "thumbnail_texts": result.get("thumbnail_texts", []),
             "context": result.get("transcript_summary", ""),
             "language": result.get("language", "en"),
             "recommended": result.get("recommended", [])
@@ -4761,10 +4765,18 @@ async def thumbnail_generate(
     title: str = Form(...),
     extra_prompt: str = Form(""),
     count: int = Form(3),
+    burn_text: bool = Form(True),
+    frame: str = Form(""),
     face: Optional[UploadFile] = File(None),
     background: Optional[UploadFile] = File(None),
 ):
-    """Generate YouTube thumbnails with Gemini image generation."""
+    """Generate YouTube thumbnails with Gemini image generation.
+
+    burn_text: the image model paints the scene with clean negative space and
+    PIL sets the hook text (Anton, black stroke). Off = the model renders the
+    text itself, which is prettier when it works and misspelled when it does
+    not. frame: url of a frame from /api/thumbnail/frames to use as the
+    person reference when no face photo is uploaded."""
     api_key = await resolve_gemini(request)
     if not api_key:
         raise gemini_missing_error()
@@ -4807,24 +4819,28 @@ async def thumbnail_generate(
             with open(bg_path, "wb") as f:
                 f.write(await background.read())
 
-        # Get video context from session (transcript summary from analysis step)
-        video_context = ""
-        if session_id in thumbnail_sessions:
-            video_context = thumbnail_sessions[session_id].get("context", "")
+        # Session context: transcript summary, the thumbnail text the critic
+        # paired with this title, the language, and the chosen video frame.
+        video_context, text_hint, language, frame_reference = "", "", "en", None
+        session = thumbnail_sessions.get(session_id)
+        if session:
+            video_context = session.get("context", "")
+            language = session.get("language", "en")
+            titles = session.get("titles", [])
+            texts = session.get("thumbnail_texts", [])
+            if title in titles and titles.index(title) < len(texts):
+                text_hint = texts[titles.index(title)]
+            if frame:
+                frame_reference = next((f for f in session.get("frames", []) if f["url"] == frame), None)
 
-        # Run generation in thread pool
         loop = asyncio.get_event_loop()
         thumbnails = await loop.run_in_executor(
             None,
-            generate_thumbnail,
-            api_key,
-            title,
-            session_id,
-            face_path,
-            bg_path,
-            extra_prompt,
-            count,
-            video_context
+            functools.partial(
+                generate_thumbnail, api_key, title, session_id, face_path, bg_path,
+                extra_prompt, count, video_context, burn_text=burn_text,
+                thumbnail_text_hint=text_hint, language=language,
+                frame_reference=frame_reference),
         )
 
         if not thumbnails:
@@ -4844,6 +4860,39 @@ async def thumbnail_generate(
             await _metering.release_reservation(reservation_id)
         print(f"❌ Thumbnail Generate Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/thumbnail/frames/{session_id}")
+async def thumbnail_frames(session_id: str, request: Request):
+    """Frames of the session's video with a large, sharp face, as candidates
+    for the thumbnail's person reference. Computed once and cached."""
+    session = thumbnail_sessions.get(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    await _assert_job_owner(request, session)
+    if "frames" in session:
+        return {"frames": session["frames"]}
+
+    # A URL session downloads in the background before transcribing; the
+    # event fires after both, so waiting on it means the file is on disk.
+    transcript_event = session.get("transcript_event")
+    if transcript_event:
+        await transcript_event.wait()
+    video_path = session.get("video_path")
+    if not video_path or not os.path.exists(video_path):
+        return {"frames": []}
+
+    lock = session.setdefault("_frames_lock", asyncio.Lock())
+    async with lock:
+        if "frames" not in session:
+            loop = asyncio.get_event_loop()
+            try:
+                frames = await loop.run_in_executor(None, extract_face_frames, video_path, session_id)
+            except Exception as e:
+                print(f"❌ [Thumbnail] Frame extraction failed: {e}")
+                frames = []
+            session["frames"] = frames
+    return {"frames": session["frames"]}
 
 
 class ThumbnailDescribeRequest(BaseModel):
