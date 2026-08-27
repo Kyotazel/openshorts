@@ -1472,6 +1472,34 @@ def _run_gemini_stage(client, model_name, prompt, schema):
             time.sleep(wait)
 
 
+def _run_stage_split(client, model_name, items, build_prompt, schema, key, costs, label):
+    """Run a Gemini stage over ``items``; on a policy block, bisect.
+
+    Google's prompt filter (PROHIBITED_CONTENT) fires on some COMBINATIONS of
+    transcript windows that pass individually (27-aug-2026: windows 5+6 of a
+    software walkthrough blocked 3/3, each alone fine, all three models).
+    A block is deterministic for a given prompt, so instead of failing the
+    job the batch is split in halves until the offending combination is
+    isolated; a single item that still blocks is dropped with a log line.
+    Returns the merged list found under ``key`` in each response."""
+    if not items:
+        return []
+    prompt = build_prompt(items)
+    try:
+        parsed, cost = _run_gemini_stage(client, model_name, prompt, schema)
+        if cost:
+            costs.append(cost)
+        return list(parsed.get(key) or [])
+    except gemini_worker.GeminiBlockedError as e:
+        if len(items) == 1:
+            print(f"   🚫 {label}: Gemini blocked window {items[0].get('id')} on its own; skipping it ({e})")
+            return []
+        mid = len(items) // 2
+        print(f"   🚫 {label}: Gemini blocked a batch of {len(items)}; retrying as {mid} + {len(items) - mid}")
+        return (_run_stage_split(client, model_name, items[:mid], build_prompt, schema, key, costs, label)
+                + _run_stage_split(client, model_name, items[mid:], build_prompt, schema, key, costs, label))
+
+
 def get_viral_clips(transcript_result, video_duration):
     """Two-pass clip selection: score transcript windows, then detail the best.
 
@@ -1512,16 +1540,18 @@ def get_viral_clips(transcript_result, video_duration):
         # --- Pass 1: score windows in batches, keep the highest-scoring ---
         scored = []
         SCORE_BATCH = 8
-        for b in range(0, len(windows), SCORE_BATCH):
-            batch = windows[b:b + SCORE_BATCH]
-            payload = [{"id": w["id"], "start": w["start"], "end": w["end"], "text": w["text"]} for w in batch]
-            prompt = gemini_worker.SCORE_PROMPT_TEMPLATE.format(
+        def _payload(ws):
+            return [{"id": w["id"], "start": w["start"], "end": w["end"], "text": w["text"]} for w in ws]
+
+        def _score_prompt(ws):
+            return gemini_worker.SCORE_PROMPT_TEMPLATE.format(
                 video_duration=video_duration, language=language,
-                windows_json=json.dumps(payload, ensure_ascii=False))
-            parsed, cost = _run_gemini_stage(client, model_name, prompt, gemini_worker.ScoreResponse)
-            if cost:
-                costs.append(cost)
-            scored.extend(parsed.get("windows") or [])
+                windows_json=json.dumps(_payload(ws), ensure_ascii=False))
+
+        for b in range(0, len(windows), SCORE_BATCH):
+            scored.extend(_run_stage_split(
+                client, model_name, windows[b:b + SCORE_BATCH], _score_prompt,
+                gemini_worker.ScoreResponse, "windows", costs, "score"))
 
         # Shortlist the top windows; scale with duration so long videos surface
         # more candidates without exploding the detail call.
@@ -1534,18 +1564,21 @@ def get_viral_clips(transcript_result, video_duration):
         print(f"   Shortlisted {len(shortlist)} window(s) for detail.")
 
         # --- Pass 2: detailed clip extraction on the shortlist ---
-        payload = [{"id": w["id"], "start": w["start"], "end": w["end"], "text": w["text"]} for w in shortlist]
         min_clips, max_clips = clip_count_targets(len(shortlist))
-        prompt = gemini_worker.DETAIL_PROMPT_TEMPLATE.format(
-            video_duration=video_duration, language=language,
-            min_clips=min_clips, max_clips=max_clips,
-            min_secs=min_secs, max_secs=max_secs,
-            windows_json=json.dumps(payload, ensure_ascii=False))
-        detail, cost = _run_gemini_stage(client, model_name, prompt, gemini_worker.DetailResponse)
-        if cost:
-            costs.append(cost)
 
-        shorts = detail.get("shorts") or []
+        def _detail_prompt(ws):
+            # A split batch keeps the full clip-count band: a short list can
+            # still hold the best clips, and the model returns fewer anyway.
+            return gemini_worker.DETAIL_PROMPT_TEMPLATE.format(
+                video_duration=video_duration, language=language,
+                min_clips=min_clips, max_clips=max_clips,
+                min_secs=min_secs, max_secs=max_secs,
+                windows_json=json.dumps(_payload(ws), ensure_ascii=False))
+
+        shorts = _run_stage_split(client, model_name, shortlist, _detail_prompt,
+                                  gemini_worker.DetailResponse, "shorts", costs, "detail")
+        if len(shorts) > max_clips:
+            shorts = shorts[:max_clips]
         # Snap each proposed clip onto real word boundaries (+ a bit of silence).
         for s in shorts:
             ns, ne = snap_clip_to_words(s.get("start", 0), s.get("end", 0), words, video_duration,
