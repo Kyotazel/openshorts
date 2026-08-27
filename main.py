@@ -662,14 +662,34 @@ def sanitize_filename(filename):
     return truncate_bytes(filename, MAX_TITLE_BYTES)
 
 
-def plan_download_attempts(direct_first, statics, paid, have_hd):
+def is_youtube_url(url):
+    """True for the hosts the proxy chain exists for. Anything else (a CDN
+    mp4, tmpfiles/catbox, an R2 link) has no IP ban to dodge and downloads
+    5-10x faster from the server's own IP than through the ISP proxies."""
+    try:
+        from urllib.parse import urlparse
+        host = (urlparse(url).hostname or "").lower()
+    except Exception:
+        return True
+    return host.endswith(("youtube.com", "youtu.be", "youtube-nocookie.com", "googlevideo.com"))
+
+
+def plan_download_attempts(direct_first, statics, paid, have_hd, youtube=True):
     """Ordered (label, capped, proxy) download plan — pure, unit-tested.
+
+    ``youtube=False`` (a direct file URL): the server's own IP first, then one
+    static proxy as the only fallback; the paid per-GB proxy is never used.
 
     Cheapest bandwidth first: the server's own IP, then the flat-rate static
     ISP proxies (uncapped 1080p, free bytes), then the per-GB paid proxy
     (720p cost cap), and last the conservative fallback strategy through the
     paid proxy (or a static/direct when no paid proxy is configured).
     ``capped`` marks attempts whose bytes are billed per GB."""
+    if not youtube:
+        plan = [('direct', False, None)]
+        if statics:
+            plan.append(('static-fallback', False, statics[0]))
+        return plan
     plan = []
     if direct_first:
         plan.append(('HD-direct', False, None))
@@ -830,8 +850,10 @@ def download_youtube_video(url, output_dir="."):
          fallback_fmt if label == 'fallback' else _hd_fmt_for(capped),
          proxy)
         for label, capped, proxy in plan_download_attempts(
-            _direct_first, _statics, _proxy, bool(hd_args))
+            _direct_first, _statics, _proxy, bool(hd_args), youtube=is_youtube_url(url))
     ]
+    if not is_youtube_url(url):
+        print("🌐 Direct file URL: downloading from the server's own IP (no proxy).")
 
     sanitized_title = None
     last_err = None

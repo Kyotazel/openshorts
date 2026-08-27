@@ -45,3 +45,16 @@ class TestOrdering:
         got = plan(True, STATICS, PAID, True)
         for _label, capped, proxy in got:
             assert capped == (proxy == PAID)
+
+
+def test_direct_file_urls_skip_the_proxy_chain():
+    """A catbox/tmpfiles/CDN mp4 has no YouTube ban to dodge: own IP first,
+    one static as fallback, never the per-GB proxy (prod 27-aug: 9 KB/s
+    through the ISP proxy vs 17 MB/s direct)."""
+    got = plan(False, ["s1", "s2"], "paid", True, youtube=False)
+    assert got == [("direct", False, None), ("static-fallback", False, "s1")]
+    assert plan(False, [], "paid", True, youtube=False) == [("direct", False, None)]
+    assert main.is_youtube_url("https://www.youtube.com/watch?v=x")
+    assert main.is_youtube_url("https://youtu.be/x")
+    assert not main.is_youtube_url("https://litter.catbox.moe/u90j4q.mp4")
+    assert not main.is_youtube_url("https://tmpfiles.org/dl/1/2/v.mp4")
