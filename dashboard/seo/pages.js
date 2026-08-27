@@ -1033,7 +1033,7 @@ const mcpAgentsPage = () => ({
   breadcrumb: [{ name: 'MCP server and API' }],
   tldr: [
     'OpenShorts has a native MCP server at mcp.openshorts.app/mcp. Connect any MCP client, Claude, ChatGPT, Cursor or a custom agent, and a prompt like "clip this podcast and schedule the best three to TikTok" becomes one instruction instead of an afternoon in an editor.',
-    'Six tools cover the whole pipeline: process_video, get_job_status, list_clips, get_quota, add_subtitles and publish_clip. There is also a plain REST API with per-user keys, and completion webhooks so pipelines never poll.',
+    'Eight tools cover the whole pipeline: process_video, create_upload, get_job_status, list_clips, get_quota, add_subtitles, recut_clip and publish_clip. There is also a plain REST API with per-user keys, and completion webhooks so pipelines never poll.',
     'The difference that survives comparison shopping is the meter. Most clipping tools now have an API, and Opus Clip added an MCP server in July 2026, but they meter agent calls per source minute or per operation. OpenShorts API calls draw from the same flat minute balance as the dashboard, and the self-hosted edition, free and MIT-licensed, serves the same MCP endpoint with no meter at all.',
   ],
   body: `
@@ -1052,7 +1052,7 @@ server, so there is no key to copy:</p>
 <ol>
 <li><strong>claude.ai:</strong> Settings, Connectors, Add custom connector, paste <code>https://mcp.openshorts.app/mcp</code>, Connect.</li>
 <li><strong>ChatGPT:</strong> Settings, Connectors, Create, paste the same URL, choose OAuth.</li>
-<li>Approve the access on openshorts.app (sign in if you are not). The 7 tools appear in every chat, and the connection is listed under Account, API keys, where revoking it disconnects the app.</li>
+<li>Approve the access on openshorts.app (sign in if you are not). The 8 tools appear in every chat, and the connection is listed under Account, API keys, where revoking it disconnects the app.</li>
 </ol>
 <h2>How do I connect Claude Code, Cursor or n8n?</h2>
 <p>CLI and workflow clients take an API key instead: create one in your account
@@ -1069,7 +1069,8 @@ snippets for Claude Desktop, Cursor, n8n and curl.</p>
 <table>
 <thead><tr><th>Tool</th><th>What it does</th></tr></thead>
 <tbody>
-<tr><td><code>process_video</code></td><td>Starts clipping a video from a URL. Returns a job id immediately; processing takes minutes.</td></tr>
+<tr><td><code>process_video</code></td><td>Starts clipping a video from a URL or an upload_id. Returns a job id immediately; processing takes minutes. Pass captions: false when the source already has subtitles burned in.</td></tr>
+<tr><td><code>create_upload</code></td><td>Reserves an upload slot for a local file: the agent PUTs the bytes to the returned URL, then processes it by upload_id.</td></tr>
 <tr><td><code>get_job_status</code></td><td>Progress, recent log lines, and the clips once the job completes.</td></tr>
 <tr><td><code>list_clips</code></td><td>Titles, durations, platform-ready descriptions and download URLs for a finished job.</td></tr>
 <tr><td><code>get_quota</code></td><td>Plan and remaining minutes, so an agent can check before starting a large job.</td></tr>
@@ -1154,7 +1155,7 @@ balance as the dashboard, so automation does not change the price of anything.</
 ${faqBlock([
   {
     q: 'Does OpenShorts have an MCP server?',
-    a: 'Yes, a native one at mcp.openshorts.app/mcp using the Streamable HTTP transport. It exposes six tools covering the full pipeline: process_video, get_job_status, list_clips, get_quota, add_subtitles and publish_clip. Authentication is an API key created in the dashboard, sent as a Bearer token.',
+    a: 'Yes, a native one at mcp.openshorts.app/mcp using the Streamable HTTP transport. It exposes eight tools covering the full pipeline: process_video, create_upload, get_job_status, list_clips, get_quota, add_subtitles, recut_clip and publish_clip. Authentication is an API key created in the dashboard, sent as a Bearer token.',
   },
   {
     q: 'Can Claude or ChatGPT create video clips with OpenShorts?',

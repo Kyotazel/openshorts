@@ -33,7 +33,7 @@ function buildClients({ cloud, url }) {
       steps: [
         'Open claude.ai → Settings → Connectors → Add custom connector.',
         `Paste this URL and save: ${url}`,
-        'Click Connect: you will land on OpenShorts to approve the access, then the 7 tools appear in every chat.',
+        'Click Connect: you will land on OpenShorts to approve the access, then the 8 tools appear in every chat.',
       ],
       snippet: url,
     },
@@ -99,7 +99,7 @@ export default function McpConnectCard({ cloud = true, compact = false }) {
       </h3>
       <p className="text-muted text-sm mb-4">
         Let Claude, ChatGPT, Cursor or n8n clip and publish for you through the built-in MCP server:
-        7 tools (process a video, check a job, list clips, add subtitles, recut, publish, quota).
+        8 tools (process a video or upload one, check a job, list clips, add subtitles, recut, publish, quota).
         {cloud
           ? ' claude.ai and ChatGPT connect with one URL and a sign-in; CLI clients use an API key.'
           : ' This install runs without accounts, so no key is needed.'}

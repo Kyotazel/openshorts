@@ -314,7 +314,7 @@ claude mcp add --transport http openshorts https://mcp.openshorts.app/mcp \
 claude mcp add --transport http openshorts http://localhost:8000/mcp
 ```
 
-Tools: `process_video`, `get_job_status`, `list_clips`, `get_quota`, `add_subtitles`, `recut_clip`, `publish_clip`. A prompt like *"clip this podcast and schedule the best 3 to TikTok"* is now a one-liner in your agent of choice.
+Tools: `process_video` (URL or `upload_id`, `captions: false` when the source already has subtitles), `create_upload` (hand the agent a local file: PUT the bytes, then process), `get_job_status`, `list_clips`, `get_quota`, `add_subtitles`, `recut_clip`, `publish_clip`. A prompt like *"clip this podcast and schedule the best 3 to TikTok"* is now a one-liner in your agent of choice.
 
 ### REST API + API keys
 

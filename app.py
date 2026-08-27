@@ -1032,6 +1032,16 @@ async def cleanup_jobs():
             except NameError:
                 pass
 
+            # Agent upload slots: expire with their file (the file sweep below
+            # removes it; a slot whose file is gone or too old is dropped).
+            for uid, slot in list(pending_uploads.items()):
+                if now - slot["created"] > UPLOAD_TTL_SECONDS:
+                    pending_uploads.pop(uid, None)
+                    try:
+                        os.remove(slot["path"])
+                    except OSError:
+                        pass
+
             # Cleanup Uploads
             for filename in os.listdir(UPLOAD_DIR):
                 file_path = os.path.join(UPLOAD_DIR, filename)
@@ -1893,6 +1903,95 @@ LAYOUT_IMPLIES = {
 }
 
 
+# --------------------------------------------------------------------------- #
+# Agent uploads: a two-step path for callers that hold a video FILE, not a URL
+# (an MCP client handed the file by the user). POST reserves an id and returns
+# a PUT URL; the client streams the raw bytes there with no auth beyond the
+# unguessable id (so `curl -T` works from any agent runtime); /api/process then
+# takes the upload_id. Files live in UPLOAD_DIR under the same retention sweep
+# as every other source upload, and the owner recorded at POST is checked at
+# process time so a leaked id cannot start a job on someone else's account.
+# --------------------------------------------------------------------------- #
+pending_uploads: Dict[str, Dict] = {}
+UPLOAD_TTL_SECONDS = int(os.environ.get("UPLOAD_TTL_SECONDS", str(24 * 3600)))
+
+
+def _upload_url_base(request):
+    return os.environ.get("PUBLIC_API_URL", "").rstrip("/") or str(request.base_url).rstrip("/")
+
+
+@app.post("/api/uploads")
+async def create_upload(request: Request):
+    """Reserve an upload slot. Body (JSON, optional): {"filename": "..."}."""
+    user_id = await _owner_id(request)
+    if BILLING_ENABLED and user_id is None:
+        raise HTTPException(status_code=401, detail="Sign in or use an API key to upload")
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    filename = os.path.basename(str((body or {}).get("filename") or "video.mp4")) or "video.mp4"
+    upload_id = str(uuid.uuid4())
+    pending_uploads[upload_id] = {
+        "user_id": user_id,
+        "filename": filename,
+        "path": os.path.join(UPLOAD_DIR, f"pending_{upload_id}_{filename}"),
+        "created": time.time(),
+        "bytes": 0,
+        "complete": False,
+    }
+    return {
+        "upload_id": upload_id,
+        "upload_url": f"{_upload_url_base(request)}/api/uploads/{upload_id}",
+        "method": "PUT",
+        "max_mb": MAX_FILE_SIZE_MB,
+        "expires_in": UPLOAD_TTL_SECONDS,
+        "hint": "PUT the raw video bytes to upload_url (e.g. curl -T video.mp4 <upload_url>), "
+                "then call /api/process (or the process_video tool) with this upload_id.",
+    }
+
+
+@app.put("/api/uploads/{upload_id}")
+async def put_upload(upload_id: str, request: Request):
+    """Receive the raw video body for a reserved slot. Streams to disk, capped
+    at MAX_FILE_SIZE_MB; a second PUT replaces the first."""
+    slot = pending_uploads.get(upload_id)
+    if not slot or time.time() - slot["created"] > UPLOAD_TTL_SECONDS:
+        pending_uploads.pop(upload_id, None)
+        raise HTTPException(status_code=404, detail="Unknown or expired upload_id")
+    limit_bytes = MAX_FILE_SIZE_MB * 1024 * 1024
+    size = 0
+    with open(slot["path"], "wb") as out:
+        async for chunk in request.stream():
+            size += len(chunk)
+            if size > limit_bytes:
+                out.close()
+                os.remove(slot["path"])
+                raise HTTPException(status_code=413, detail=f"File too large. Max size {MAX_FILE_SIZE_MB}MB")
+            out.write(chunk)
+    if size == 0:
+        os.remove(slot["path"])
+        raise HTTPException(status_code=400, detail="Empty body")
+    slot.update({"bytes": size, "complete": True})
+    duration = await asyncio.get_event_loop().run_in_executor(None, _media_duration_seconds, slot["path"])
+    if duration <= 0:
+        os.remove(slot["path"])
+        slot["complete"] = False
+        raise HTTPException(status_code=400, detail="The body is not a readable video file")
+    return {"upload_id": upload_id, "bytes": size, "duration_seconds": round(duration, 1),
+            "hint": "Now call /api/process with upload_id."}
+
+
+def _take_pending_upload(upload_id, user_id):
+    """The completed upload for this caller, or an HTTPException."""
+    slot = pending_uploads.get(upload_id)
+    if not slot or (BILLING_ENABLED and slot.get("user_id") != user_id):
+        raise HTTPException(status_code=404, detail="Unknown or expired upload_id")
+    if not slot.get("complete") or not os.path.exists(slot["path"]):
+        raise HTTPException(status_code=409, detail="Upload not received yet: PUT the video to upload_url first")
+    return slot
+
+
 def layout_env(requested):
     """Env overrides for the layouts this job allows. Unknown names are ignored
     rather than rejected: a newer dashboard must not break an older API.
@@ -1938,7 +2037,9 @@ async def process_endpoint(
     clip_max_seconds: Optional[str] = Form(None),
     auto_hook: Optional[str] = Form(None),
     auto_hook_style: Optional[str] = Form(None),
-    thumbnail_session_id: Optional[str] = Form(None)
+    thumbnail_session_id: Optional[str] = Form(None),
+    captions: Optional[str] = Form(None),
+    upload_id: Optional[str] = Form(None),
 ):
     api_key = await resolve_gemini(request)
     if not api_key:
@@ -1964,6 +2065,8 @@ async def process_endpoint(
         auto_hook = body.get("auto_hook")
         auto_hook_style = body.get("auto_hook_style")
         thumbnail_session_id = body.get("thumbnail_session_id")
+        captions = body.get("captions")
+        upload_id = body.get("upload_id")
 
     # Normalize output format (auto = keep pipeline default).
     if output_format not in ("vertical", "horizontal", "square"):
@@ -1988,8 +2091,13 @@ async def process_endpoint(
         if not src or not os.path.exists(src):
             raise HTTPException(status_code=404, detail="Source video for this session is no longer on disk")
 
-    if not url and not file and not thumb_session:
-        raise HTTPException(status_code=400, detail="Must provide URL or File")
+    # Agent upload (POST /api/uploads + PUT): the file is already on disk.
+    upload_slot = None
+    if upload_id and not url and not file and not thumb_session:
+        upload_slot = _take_pending_upload(upload_id, await _owner_id(request))
+
+    if not url and not file and not thumb_session and not upload_slot:
+        raise HTTPException(status_code=400, detail="Must provide URL, File or upload_id")
 
     # Completion callback: reject unsafe targets NOW (clear 400) — delivery
     # re-validates anyway, but failing at submit is the debuggable behavior.
@@ -2043,7 +2151,8 @@ async def process_endpoint(
         "ip": client_ip,
         "user_agent": user_agent,
         "timestamp": time.time(),
-        "source": "thumbnail_session" if thumb_session else ("url" if url else "file"),
+        "source": ("thumbnail_session" if thumb_session else "upload_id" if upload_slot
+                   else "url" if url else "file"),
     }
 
     job_id = str(uuid.uuid4())
@@ -2117,6 +2226,13 @@ async def process_endpoint(
     if n_clips is not None or min_secs is not None or max_secs is not None:
         print(f"[gen-controls] job={job_id} clips={n_clips} band={min_secs}-{max_secs}")
 
+    # captions=false: the source already carries burned-in subtitles (or the
+    # caller adds its own later), so skip the free auto-caption pass instead
+    # of stacking a second layer. Absent → the deployment default (on).
+    if captions is not None and str(captions).lower() in ("0", "false", "no"):
+        env["AUTO_CAPTIONS"] = "0"
+        print(f"[captions] job={job_id} auto-captions off")
+
     input_path = None
     if url:
         # Keep the downloaded source inside the job dir: the clip editor's
@@ -2145,6 +2261,18 @@ async def process_endpoint(
             with open(transcript_path, "w") as f:
                 json.dump(thumb_session["transcript"], f)
             cmd.extend(["--transcript", transcript_path])
+    elif upload_slot:
+        # Move the pre-uploaded file under the job's name so it is cleaned up
+        # with the job like any other upload; the slot is consumed.
+        src = upload_slot["path"]
+        src_duration = _media_duration_seconds(src)
+        if MIN_SOURCE_SECONDS > 0 and 0 < src_duration < MIN_SOURCE_SECONDS:
+            shutil.rmtree(job_output_dir, ignore_errors=True)
+            _reject_short_source(src_duration)
+        input_path = os.path.join(UPLOAD_DIR, f"{job_id}_{upload_slot['filename']}")
+        os.replace(src, input_path)
+        pending_uploads.pop(upload_id, None)
+        cmd.extend(["-i", input_path])
     else:
         # Save uploaded file with size limit check.
         # basename() strips any path components from the client-supplied

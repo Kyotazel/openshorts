@@ -225,7 +225,7 @@ creator instead of a stranger; an uploaded face photo still wins.
   endpoint changes. Key management itself refuses API-key auth: a leaked key
   cannot mint replacements.
 - **MCP server** (`mcp_server.py`, mounted always): stateless Streamable-HTTP
-  JSON-RPC at `/mcp` — no SDK dependency, ~3 methods + 7 tools. Each tool calls
+  JSON-RPC at `/mcp` — no SDK dependency, ~3 methods + 8 tools. Each tool calls
   back into this same app in-process (`httpx.ASGITransport`) forwarding the
   caller's auth headers, so it can never drift from the REST behavior. Cloud
   mode 401s without a resolvable user; self-host stays BYOK-open.

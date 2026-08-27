@@ -77,7 +77,20 @@ TOOLS = [
                     "type": "string",
                     "description": "Public video URL, passed through exactly as the user gave it "
                                    "(YouTube watch/short/live URL, or a direct video file URL). "
-                                   "The server does the downloading.",
+                                   "The server does the downloading. Omit when using upload_id.",
+                },
+                "upload_id": {
+                    "type": "string",
+                    "description": "Instead of source_url: the id from create_upload after the "
+                                   "file was PUT to its upload_url. Use when the user gave you a "
+                                   "video file rather than a link.",
+                },
+                "captions": {
+                    "type": "boolean",
+                    "description": "Default true: burn word-level captions on every clip. Set false "
+                                   "when the source already has subtitles burned in (they would "
+                                   "stack) or the user wants clean clips; add_subtitles can still "
+                                   "caption a clip later.",
                 },
                 "confirm_rights": {
                     "type": "boolean",
@@ -121,7 +134,26 @@ TOOLS = [
                     "description": "Maximum clip length in seconds (default 60). Must be ≥ 5s above the minimum.",
                 },
             },
-            "required": ["source_url", "confirm_rights"],
+            "required": ["confirm_rights"],
+        },
+    },
+    {
+        "name": "create_upload",
+        "title": "Reserve an upload slot for a local video file",
+        "description": (
+            "Use when the user hands you a video FILE instead of a link. Returns "
+            "an upload_url: send the file's raw bytes to it with an HTTP PUT "
+            "(for example `curl -T video.mp4 <upload_url>`), then call "
+            "process_video with the returned upload_id. The slot expires after "
+            "24 hours; max size is returned as max_mb. If you cannot make HTTP "
+            "requests from your environment, ask the user to run the curl "
+            "command or to share a public link instead."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "filename": {"type": "string", "description": "Original file name (optional, for the extension)."},
+            },
         },
     },
     {
@@ -294,8 +326,11 @@ async def _tool_process_video(client, args):
     if not args.get("confirm_rights"):
         return {"error": "confirm_rights must be true: the user must own the "
                          "content or hold the rights to process it."}, True
+    if not args.get("source_url") and not args.get("upload_id"):
+        return {"error": "Give source_url (a public video link) or upload_id (from create_upload)."}, True
     body = {
-        "url": args["source_url"],
+        "url": args.get("source_url"),
+        "upload_id": args.get("upload_id"),
         "acknowledged": True,
         "layouts": args.get("layouts") or [],
         "output_format": args.get("output_format"),
@@ -303,7 +338,7 @@ async def _tool_process_video(client, args):
         "webhook_url": args.get("webhook_url"),
         "webhook_secret": args.get("webhook_secret"),
     }
-    for k in ("target_clips", "clip_min_seconds", "clip_max_seconds"):
+    for k in ("target_clips", "clip_min_seconds", "clip_max_seconds", "captions"):
         if args.get(k) is not None:
             body[k] = args[k]
     resp = await client.post("/api/process", json=body)
@@ -317,6 +352,13 @@ async def _tool_process_video(client, args):
     data["hint"] = ("Processing takes minutes. Poll get_job_status every 30-60s"
                     + ("" if body["webhook_url"] else " (or re-run with webhook_url for a callback)") + ".")
     return data, False
+
+
+async def _tool_create_upload(client, args):
+    resp = await client.post("/api/uploads", json={"filename": args.get("filename") or "video.mp4"})
+    if resp.status_code >= 400:
+        return _api_error(resp), True
+    return resp.json(), False
 
 
 async def _tool_get_job_status(client, args):
@@ -415,6 +457,7 @@ async def _tool_publish_clip(client, args):
 
 _TOOL_IMPLS = {
     "process_video": _tool_process_video,
+    "create_upload": _tool_create_upload,
     "get_job_status": _tool_get_job_status,
     "list_clips": _tool_list_clips,
     "get_quota": _tool_get_quota,
