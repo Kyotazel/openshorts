@@ -1069,7 +1069,7 @@ snippets for Claude Desktop, Cursor, n8n and curl.</p>
 <table>
 <thead><tr><th>Tool</th><th>What it does</th></tr></thead>
 <tbody>
-<tr><td><code>process_video</code></td><td>Starts clipping a video from a URL or an upload_id. Returns a job id immediately; processing takes minutes. Pass captions: false when the source already has subtitles burned in, auto_hook: true to burn the hook line.</td></tr>
+<tr><td><code>process_video</code></td><td>Starts clipping a video from a URL or an upload_id. Returns a job id immediately; processing takes minutes. Pass captions: false when the source already has subtitles burned in, auto_hook: false to skip the hook line (on by default).</td></tr>
 <tr><td><code>create_upload</code></td><td>Reserves an upload slot for a local file: the agent PUTs the bytes to the returned URL, then processes it by upload_id.</td></tr>
 <tr><td><code>get_job_status</code></td><td>Progress, recent log lines, and the clips once the job completes.</td></tr>
 <tr><td><code>list_clips</code></td><td>Titles, durations, platform-ready descriptions and download URLs for a finished job.</td></tr>

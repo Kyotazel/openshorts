@@ -62,8 +62,8 @@ TOOLS = [
         "description": (
             "Start clipping a video from its URL. OpenShorts downloads the "
             "source itself, transcribes it, finds the most viral moments with AI "
-            "and renders vertical (9:16) clips. Captions are burned unless "
-            "captions=false; the AI hook line is burned only with auto_hook=true. "
+            "and renders vertical (9:16) clips. Captions and the AI hook line are "
+            "burned by default; pass captions=false or auto_hook=false to skip either. "
             "Call this directly "
             "with the URL the user gave you; do not fetch, search or inspect the "
             "URL yourself first (you cannot access the video, and it is not "
@@ -91,8 +91,8 @@ TOOLS = [
                 "auto_hook": {
                     "type": "boolean",
                     "description": "Burn the AI-written hook line (the clip's title) over the first "
-                                   "seconds of each clip, as the dashboard does by default. Off when "
-                                   "omitted, so existing integrations keep their output.",
+                                   "seconds of each clip, as the dashboard does. Default true; set "
+                                   "false for clean clips.",
                 },
                 "hook_style": {
                     "type": "string",
@@ -359,7 +359,10 @@ async def _tool_process_video(client, args):
     for k in ("target_clips", "clip_min_seconds", "clip_max_seconds", "captions"):
         if args.get(k) is not None:
             body[k] = args[k]
-    if args.get("auto_hook"):
+    # Same default as the dashboard: hook on unless the caller opts out. The
+    # REST endpoint keeps "absent = off" for older integrations; the MCP
+    # tool is newer than the hook and its users expect the dashboard output.
+    if args.get("auto_hook", True):
         body["auto_hook"] = True
         if args.get("hook_style"):
             body["auto_hook_style"] = args["hook_style"]
