@@ -129,7 +129,7 @@ critic that scores, dedupes by angle and returns 10, each paired with a 1-4
 word `thumbnail_text` that complements the title rather than repeating it.
 Rules baked in: payoff inside 50 characters (phones cut there), keyword in the
 first 3 words, same language as the transcript. Text model is
-`GEMINI_MODEL_THUMBNAIL` (default `gemini-3.5-flash`), deliberately not
+`GEMINI_MODEL_THUMBNAIL` (default `gemini-3.7-flash`), deliberately not
 `GEMINI_MODEL`: flash-lite is fine for a closed-choice layout pick and visibly
 worse at creative titles. Image model is `GEMINI_IMAGE_MODEL` (default
 `gemini-3.1-flash-image`).

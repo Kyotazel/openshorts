@@ -13,7 +13,7 @@ from PIL import Image, ImageDraw, ImageFont, ImageFilter
 # but titles are the one place where the creative gap between lite and flash
 # shows, and ten titles per video cost cents either way. The image model
 # stays on gemini-3.1-flash-image; the text models cannot draw.
-TEXT_MODEL = os.environ.get("GEMINI_MODEL_THUMBNAIL") or "gemini-3.5-flash"
+TEXT_MODEL = os.environ.get("GEMINI_MODEL_THUMBNAIL") or "gemini-3.7-flash"
 IMAGE_MODEL = os.environ.get("GEMINI_IMAGE_MODEL") or "gemini-3.1-flash-image"
 
 # Frames sent with the transcript instead of the whole video. Gemini bills
