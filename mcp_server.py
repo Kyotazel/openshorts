@@ -62,7 +62,9 @@ TOOLS = [
         "description": (
             "Start clipping a video from its URL. OpenShorts downloads the "
             "source itself, transcribes it, finds the most viral moments with AI "
-            "and renders vertical (9:16) clips with captions. Call this directly "
+            "and renders vertical (9:16) clips. Captions are burned unless "
+            "captions=false; the AI hook line is burned only with auto_hook=true. "
+            "Call this directly "
             "with the URL the user gave you; do not fetch, search or inspect the "
             "URL yourself first (you cannot access the video, and it is not "
             "needed). Returns a job_id immediately — the work takes minutes; "
@@ -85,6 +87,17 @@ TOOLS = [
                     "description": "Instead of source_url: the id from create_upload after the "
                                    "file was PUT to its upload_url. Use when the user gave you a "
                                    "video file rather than a link.",
+                },
+                "auto_hook": {
+                    "type": "boolean",
+                    "description": "Burn the AI-written hook line (the clip's title) over the first "
+                                   "seconds of each clip, as the dashboard does by default. Off when "
+                                   "omitted, so existing integrations keep their output.",
+                },
+                "hook_style": {
+                    "type": "string",
+                    "enum": ["classic", "dark", "yellow", "red", "outline", "outline_yellow"],
+                    "description": "Look of the hook text (with auto_hook). Default classic.",
                 },
                 "captions": {
                     "type": "boolean",
@@ -346,6 +359,10 @@ async def _tool_process_video(client, args):
     for k in ("target_clips", "clip_min_seconds", "clip_max_seconds", "captions"):
         if args.get(k) is not None:
             body[k] = args[k]
+    if args.get("auto_hook"):
+        body["auto_hook"] = True
+        if args.get("hook_style"):
+            body["auto_hook_style"] = args["hook_style"]
     resp = await client.post("/api/process", json=body)
     if resp.status_code >= 400:
         return _api_error(resp), True

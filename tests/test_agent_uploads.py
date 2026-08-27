@@ -141,3 +141,17 @@ def test_tmpfiles_link_is_refreshed_through_the_page():
     assert file_hosts.resolve_tmpfiles("https://tmpfiles.org/wAwNGnPW0lXW/video.mp4", fetch=fetch) == fresh
     assert file_hosts.resolve_tmpfiles(stale, fetch=lambda u: "<html>no link</html>") == stale
     assert not file_hosts.is_tmpfiles("https://youtube.com/watch?v=x")
+
+
+def test_auto_hook_reaches_the_job_env(dirs, monkeypatch):
+    slot = _tool_payload(_mcp("create_upload", {}))
+    async def _put():
+        async with _client() as c:
+            return await c.put(f"/api/uploads/{slot['upload_id']}", content=b"x" * 100)
+    assert asyncio.run(_put()).status_code == 200
+    async def fake_put(item): pass
+    monkeypatch.setattr(app_module.job_queue, "put", fake_put)
+    payload = _tool_payload(_mcp("process_video", {"upload_id": slot["upload_id"], "confirm_rights": True,
+                                                   "auto_hook": True, "hook_style": "yellow"}))
+    env = app_module.jobs[payload["job_id"]]["env"]
+    assert env["AUTO_HOOK"] == "1" and env["AUTO_HOOK_STYLE"] == "yellow"
