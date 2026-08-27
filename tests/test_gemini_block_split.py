@@ -27,8 +27,10 @@ def test_block_on_pair_isolates_and_drops_only_the_culprit(monkeypatch):
     # its own inside the [0-3] batch, which passed, so it is kept too.
     assert got == [f"w{i}" for i in range(8)]
     assert calls[0] == [f"w{i}" for i in range(8)]  # tried the whole batch first
-    assert [c for c in calls if "w5" in c and "w6" in c] == [calls[0], ["w4", "w5", "w6", "w7"], ["w5", "w6"]]
-    assert len(costs) == 4  # [0-3], [4], [5], [6,7]
+    # Halving [4-7] separates w5 from w6 at once: two blocked calls, then
+    # three that pass: [0-3], [4,5], [6,7].
+    assert [c for c in calls if "w5" in c and "w6" in c] == [calls[0], ["w4", "w5", "w6", "w7"]]
+    assert len(costs) == 3
 
 
 def test_no_block_is_a_single_call(monkeypatch):
