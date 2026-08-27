@@ -383,6 +383,7 @@ Per concept give:
 - "text_position": one of "left", "right", "top", "bottom" (where the text block sits; the subject goes on the opposite side).
 - "text_color": "white" or "yellow" (yellow for money/energy, white otherwise).
 - "scene": a precise image-generation prompt in English, 2-4 sentences: subject, expression/pose, background, lighting, colours, camera. Say that the text_position side is clean negative space (simple, dark or plain) so a headline can sit there. It must NOT ask for any text, letters, captions or logos in the image.
+- The image model REFUSES prompts that name or depict real people, companies or brands. Never write a real name (person, company, product, logo) in "scene". Refer to the presenter only as "the person in the provided photo" when a photo is provided, otherwise as a generic, unnamed person or use objects and symbols.
 - "why": one short sentence on why this earns the click.
 
 OUTPUT JSON:
@@ -517,6 +518,14 @@ def finalize_thumbnail(img, out_path):
     return out_path
 
 
+def _image_part(path):
+    """A JPEG byte part for the image model (re-encoded so HEIC/PNG uploads
+    and odd modes all arrive the same way)."""
+    buf = io.BytesIO()
+    Image.open(path).convert("RGB").save(buf, "JPEG", quality=92)
+    return types.Part.from_bytes(data=buf.getvalue(), mime_type="image/jpeg")
+
+
 def _generate_one(client, concept, reference_images, out_path, burn_text):
     """One image call for one concept; returns the saved path or raises."""
     if burn_text:
@@ -548,6 +557,10 @@ Style: high contrast, saturated colours, crisp subject separation, cinematic lig
             image_config=types.ImageConfig(aspect_ratio="16:9", image_size="2K"),
         ),
     )
+    if not response.parts:
+        cand = (response.candidates or [None])[0]
+        reason = getattr(cand, "finish_reason", None) or getattr(response, "prompt_feedback", None)
+        raise RuntimeError(f"Gemini returned no image (finish_reason={reason})")
     for part in response.parts:
         if part.text is not None:
             print(f"📝 [Thumbnail] Gemini text: {part.text[:200]}")
@@ -574,15 +587,17 @@ def generate_thumbnail(api_key, title, session_id, face_image_path=None, bg_imag
     output_dir = os.path.join("output", "thumbnails", session_id)
     os.makedirs(output_dir, exist_ok=True)
 
+    # References travel as immutable byte parts: one PIL Image shared by the
+    # worker threads below raced inside the SDK's encoder and every call died.
     reference_images = []
     if face_image_path and os.path.exists(face_image_path):
-        reference_images.append(Image.open(face_image_path))
+        reference_images.append(_image_part(face_image_path))
     elif frame_reference and os.path.exists(frame_reference.get("path", "")):
         ref_path = os.path.join(output_dir, "person_reference.jpg")
         _crop_face_reference(frame_reference["path"], frame_reference.get("face"), ref_path)
-        reference_images.append(Image.open(ref_path))
+        reference_images.append(_image_part(ref_path))
     if bg_image_path and os.path.exists(bg_image_path):
-        reference_images.append(Image.open(bg_image_path))
+        reference_images.append(_image_part(bg_image_path))
 
     concepts = plan_thumbnail_concepts(
         client, title, count, video_context=video_context, extra_prompt=extra_prompt,
@@ -595,11 +610,27 @@ def generate_thumbnail(api_key, title, session_id, face_image_path=None, bg_imag
 
     def run(i):
         out_path = os.path.join(output_dir, f"thumb_{batch}_{i + 1}.jpg")
+        concept = concepts[i]
         try:
-            _generate_one(client, concepts[i], reference_images, out_path, burn_text)
+            try:
+                _generate_one(client, concept, reference_images, out_path, burn_text)
+                fallback = False
+            except RuntimeError as e:
+                if "no image" not in str(e):
+                    raise
+                # Gemini refuses recognisable public figures, by reference photo
+                # and by name alike (IMAGE_OTHER). Retry once with no reference
+                # and a generic presenter instead of failing the whole batch.
+                print(f"⚠️ [Thumbnail] Generation {i + 1} blocked ({e}); retrying without the person")
+                generic = dict(concept, scene=(
+                    "Do not depict any real, named or recognisable person; if a presenter is needed, "
+                    "show a generic one seen from behind or in silhouette, or use an object instead. "
+                    + concept["scene"]))
+                _generate_one(client, generic, [], out_path, burn_text)
+                fallback = True
             print(f"✅ [Thumbnail] Saved: {out_path}")
             return {"url": f"/thumbnails/{session_id}/{os.path.basename(out_path)}",
-                    "text": concepts[i]["text"], "why": concepts[i]["why"]}
+                    "text": concept["text"], "why": concept["why"], "fallback": fallback}
         except Exception as e:
             print(f"❌ [Thumbnail] Generation {i + 1} failed: {e}")
             return {"error": str(e)}

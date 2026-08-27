@@ -101,6 +101,7 @@ export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUse
   const [thumbnailCount, setThumbnailCount] = useState(3);
   const [burnText, setBurnText] = useState(true); // crisp PIL text vs model-rendered text
   const [frames, setFrames] = useState(null); // null = not fetched yet
+  const [framesLoading, setFramesLoading] = useState(false);
   const [selectedFrame, setSelectedFrame] = useState(null);
   const [isGenerating, setIsGenerating] = useState(false);
   const [generatedThumbnails, setGeneratedThumbnails] = useState([]);
@@ -307,16 +308,21 @@ export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUse
 
   // Frames with a big, sharp face from the uploaded video: one click replaces
   // the face upload nobody makes. Fetched once when the generate step opens.
+  // `frames` is deliberately not a dependency: setting it inside the effect
+  // would re-run it and the cleanup would discard the response in flight.
+  const framesRequestedFor = useRef(null);
   useEffect(() => {
-    if (step !== 2 || mode !== 'video' || !sessionId || frames !== null) return;
-    let cancelled = false;
+    if (step !== 2 || mode !== 'video' || !sessionId) return;
+    if (framesRequestedFor.current === sessionId) return;
+    framesRequestedFor.current = sessionId;
     setFrames([]);
+    setFramesLoading(true);
     apiFetch(`/api/thumbnail/frames/${sessionId}`)
       .then(res => (res.ok ? res.json() : { frames: [] }))
-      .then(data => { if (!cancelled) setFrames(data.frames || []); })
-      .catch(() => { if (!cancelled) setFrames([]); });
-    return () => { cancelled = true; };
-  }, [step, mode, sessionId, frames]);
+      .then(data => setFrames(data.frames || []))
+      .catch(() => setFrames([]))
+      .finally(() => setFramesLoading(false));
+  }, [step, mode, sessionId]);
 
   const handleDownload = async (url) => {
     try {
@@ -443,6 +449,7 @@ export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUse
     setChatHistory([]);
     setFaceImage(null);
     setFrames(null);
+    framesRequestedFor.current = null;
     setSelectedFrame(null);
     setThumbnailTexts([]);
     setBgImage(null);
@@ -753,7 +760,7 @@ export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUse
                 <div className="card p-6 space-y-3">
                   <p className="eyebrow">YOUR FACE FROM THE VIDEO</p>
                   {frames.length === 0 ? (
-                    <p className="text-xs text-muted lowercase">Looking for sharp frames with a face...</p>
+                    <p className="text-xs text-muted lowercase">{framesLoading ? 'Looking for sharp frames with a face...' : 'No usable face found in the video.'}</p>
                   ) : (
                     <>
                       <div className="grid grid-cols-3 gap-2">
@@ -894,6 +901,7 @@ export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUse
                               )}
                             </span>
                             {thumb.why && <p className="text-xs text-muted mt-1 truncate">{thumb.why}</p>}
+                            {thumb.fallback && <p className="text-xs text-warn mt-1">Gemini refused to draw this person (public figures are blocked), so it was rendered without them.</p>}
                           </div>
                           <button
                             onClick={(e) => { e.stopPropagation(); handleDownload(url); }}
