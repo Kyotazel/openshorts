@@ -98,6 +98,10 @@ def probe_url_minutes(url: str) -> float:
     # SSRF guard: reject non-http(s) / private / metadata hosts before probing.
     from security_utils import assert_public_url
     assert_public_url(url)
+    # Throwaway hosts (tmpfiles.org) sign links with a short-lived stamp; take
+    # the live one so the probe sees the file and not an HTML page.
+    import file_hosts
+    url = file_hosts.resolve(url)
 
     bgutil_http = os.environ.get("BGUTIL_BASE_URL", "").strip()
     bgutil_script = os.environ.get("BGUTIL_SCRIPT_PATH", "").strip()
@@ -151,9 +155,37 @@ def probe_url_minutes(url: str) -> float:
                 if duration:
                     return float(duration) / 60.0
                 last_err = ValueError("no duration in metadata")
+                if info.get("extractor") == "generic":
+                    # A direct media file: yt-dlp's generic extractor never
+                    # reports a duration, so stop trying proxies and read the
+                    # container header over HTTP instead.
+                    break
             except Exception as e:
                 last_err = e
+        else:
+            continue
+        break
+    # Direct file URLs (agent uploads on tmpfiles/uguu/R2, a CDN mp4): ffprobe
+    # fetches just the moov atom via range requests. Also the last resort for
+    # any URL yt-dlp could not size.
+    try:
+        seconds = _ffprobe_url_seconds(url)
+        if seconds > 0:
+            return seconds / 60.0
+    except Exception as e:
+        last_err = e
     raise ValueError(f"Could not determine video duration ({last_err})")
+
+
+def _ffprobe_url_seconds(url: str, timeout: int = 30) -> float:
+    out = subprocess.check_output(
+        ["ffprobe", "-v", "error", "-rw_timeout", str(timeout * 1_000_000),
+         "-user_agent", "Mozilla/5.0 (OpenShorts probe)",
+         "-show_entries", "format=duration",
+         "-of", "default=noprint_wrappers=1:nokey=1", url],
+        stderr=subprocess.STDOUT, timeout=timeout + 5,
+    )
+    return float(out.decode().strip() or 0)
 
 
 # --------------------------------------------------------------------------- #
