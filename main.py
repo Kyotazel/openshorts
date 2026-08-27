@@ -691,6 +691,10 @@ def download_youtube_video(url, output_dir="."):
     # before handing the URL to yt-dlp.
     from security_utils import assert_public_url
     assert_public_url(url)
+    # Throwaway hosts agents fall back to (tmpfiles.org) hand out short-lived
+    # signed links; refresh through the host's page so yt-dlp gets the file.
+    import file_hosts
+    url = file_hosts.resolve(url)
 
     print(f"🔍 Debug: yt-dlp version: {yt_dlp.version.__version__}")
     print("📥 Downloading video from YouTube...")

@@ -1034,13 +1034,8 @@ async def cleanup_jobs():
 
             # Agent upload slots: expire with their file (the file sweep below
             # removes it; a slot whose file is gone or too old is dropped).
-            for uid, slot in list(pending_uploads.items()):
-                if now - slot["created"] > UPLOAD_TTL_SECONDS:
-                    pending_uploads.pop(uid, None)
-                    try:
-                        os.remove(slot["path"])
-                    except OSError:
-                        pass
+            for uid in _sweep_pending_uploads(now):
+                print(f"🧹 Expired agent upload slot {uid}")
 
             # Cleanup Uploads
             for filename in os.listdir(UPLOAD_DIR):
@@ -1913,7 +1908,9 @@ LAYOUT_IMPLIES = {
 # process time so a leaked id cannot start a job on someone else's account.
 # --------------------------------------------------------------------------- #
 pending_uploads: Dict[str, Dict] = {}
-UPLOAD_TTL_SECONDS = int(os.environ.get("UPLOAD_TTL_SECONDS", str(24 * 3600)))
+# Unconsumed slots are gone after this; a consumed one becomes the job's
+# input and follows the job's own retention instead.
+UPLOAD_TTL_SECONDS = int(os.environ.get("UPLOAD_TTL_SECONDS", str(6 * 3600)))
 
 
 def _upload_url_base(request):
@@ -1947,7 +1944,9 @@ async def create_upload(request: Request):
         "max_mb": MAX_FILE_SIZE_MB,
         "expires_in": UPLOAD_TTL_SECONDS,
         "hint": "PUT the raw video bytes to upload_url (e.g. curl -T video.mp4 <upload_url>), "
-                "then call /api/process (or the process_video tool) with this upload_id.",
+                "then call /api/process (or the process_video tool) with this upload_id. "
+                "The slot and file are deleted after expires_in seconds if unused, or "
+                "DELETE this URL to drop them sooner.",
     }
 
 
@@ -1980,6 +1979,36 @@ async def put_upload(upload_id: str, request: Request):
         raise HTTPException(status_code=400, detail="The body is not a readable video file")
     return {"upload_id": upload_id, "bytes": size, "duration_seconds": round(duration, 1),
             "hint": "Now call /api/process with upload_id."}
+
+
+@app.delete("/api/uploads/{upload_id}")
+async def delete_upload(upload_id: str, request: Request):
+    """Drop a slot and its file before it expires (owner only in cloud mode)."""
+    slot = pending_uploads.get(upload_id)
+    if not slot or (BILLING_ENABLED and slot.get("user_id") != await _owner_id(request)):
+        raise HTTPException(status_code=404, detail="Unknown or expired upload_id")
+    pending_uploads.pop(upload_id, None)
+    try:
+        os.remove(slot["path"])
+    except OSError:
+        pass
+    return {"deleted": upload_id}
+
+
+def _sweep_pending_uploads(now=None):
+    """Expire agent upload slots older than UPLOAD_TTL_SECONDS (file included).
+    Returns the ids removed. Called from the cleanup loop; pure enough to test."""
+    now = now or time.time()
+    gone = []
+    for uid, slot in list(pending_uploads.items()):
+        if now - slot["created"] > UPLOAD_TTL_SECONDS:
+            pending_uploads.pop(uid, None)
+            try:
+                os.remove(slot["path"])
+            except OSError:
+                pass
+            gone.append(uid)
+    return gone
 
 
 def _take_pending_upload(upload_id, user_id):

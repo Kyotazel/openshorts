@@ -76,8 +76,9 @@ TOOLS = [
                 "source_url": {
                     "type": "string",
                     "description": "Public video URL, passed through exactly as the user gave it "
-                                   "(YouTube watch/short/live URL, or a direct video file URL). "
-                                   "The server does the downloading. Omit when using upload_id.",
+                                   "(YouTube watch/short/live URL, a direct video file URL, or a "
+                                   "tmpfiles.org link from the create_upload fallback). The server "
+                                   "does the downloading. Omit when using upload_id.",
                 },
                 "upload_id": {
                     "type": "string",
@@ -144,10 +145,14 @@ TOOLS = [
             "Use when the user hands you a video FILE instead of a link. Returns "
             "an upload_url: send the file's raw bytes to it with an HTTP PUT "
             "(for example `curl -T video.mp4 <upload_url>`), then call "
-            "process_video with the returned upload_id. The slot expires after "
-            "24 hours; max size is returned as max_mb. If you cannot make HTTP "
-            "requests from your environment, ask the user to run the curl "
-            "command or to share a public link instead."
+            "process_video with the returned upload_id. Unused slots are "
+            "deleted after expires_in seconds (6 h); max size is max_mb. "
+            "FALLBACK if your sandbox cannot reach upload_url: upload the file "
+            "to tmpfiles.org (`curl -F file=@video.mp4 https://tmpfiles.org/api/v1/upload`), "
+            "and pass the returned url to process_video as source_url right "
+            "away (their files expire after 60 minutes; the server refreshes "
+            "the signed download link itself). Otherwise ask the user to run "
+            "the curl command or to share a public link."
         ),
         "inputSchema": {
             "type": "object",

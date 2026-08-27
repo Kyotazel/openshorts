@@ -108,3 +108,36 @@ def test_unknown_or_unfinished_upload_id(dirs):
     slot = _tool_payload(_mcp("create_upload", {}))
     payload = _tool_payload(_mcp("process_video", {"upload_id": slot["upload_id"], "confirm_rights": True}))
     assert "PUT" in payload["error"]
+
+
+def test_sweep_expires_old_slots(dirs, monkeypatch):
+    slot = _tool_payload(_mcp("create_upload", {}))
+    path = app_module.pending_uploads[slot["upload_id"]]["path"]
+    open(path, "wb").write(b"x")
+    assert slot["upload_id"] not in app_module._sweep_pending_uploads(now=__import__("time").time() + 1)
+    gone = app_module._sweep_pending_uploads(now=__import__("time").time() + app_module.UPLOAD_TTL_SECONDS + 1)
+    assert slot["upload_id"] in gone and not os.path.exists(path)
+
+
+def test_delete_upload(dirs):
+    slot = _tool_payload(_mcp("create_upload", {}))
+    async def _del():
+        async with _client() as c:
+            return await c.delete(f"/api/uploads/{slot['upload_id']}")
+    assert asyncio.run(_del()).status_code == 200
+    assert slot["upload_id"] not in app_module.pending_uploads
+
+
+def test_tmpfiles_link_is_refreshed_through_the_page():
+    import file_hosts
+    stale = "https://tmpfiles.org/dl/1787841143.abc/wAwNGnPW0lXW/video.mp4"
+    fresh = "https://tmpfiles.org/dl/1787841582.def/wAwNGnPW0lXW/video.mp4"
+    seen = {}
+    def fetch(url):
+        seen["page"] = url
+        return f'<a href="{fresh}">Download</a>'
+    assert file_hosts.resolve_tmpfiles(stale, fetch=fetch) == fresh
+    assert seen["page"] == "https://tmpfiles.org/wAwNGnPW0lXW/video.mp4"
+    assert file_hosts.resolve_tmpfiles("https://tmpfiles.org/wAwNGnPW0lXW/video.mp4", fetch=fetch) == fresh
+    assert file_hosts.resolve_tmpfiles(stale, fetch=lambda u: "<html>no link</html>") == stale
+    assert not file_hosts.is_tmpfiles("https://youtube.com/watch?v=x")
