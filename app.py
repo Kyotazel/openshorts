@@ -4749,9 +4749,15 @@ async def thumbnail_titles(
 
         new_titles = result.get("titles", [])
         session["titles"] = new_titles
+        session["thumbnail_texts"] = result.get("thumbnail_texts", [])
+        # The user may have asked for another language ("in English"): the
+        # thumbnail text must follow the titles, not the transcript.
+        if result.get("language"):
+            session["language"] = result["language"]
         session["conversation"].append({"role": "assistant", "content": json.dumps(new_titles)})
 
-        return {"titles": new_titles}
+        return {"titles": new_titles, "thumbnail_texts": session["thumbnail_texts"],
+                "language": session["language"]}
 
     except Exception as e:
         print(f"❌ Thumbnail Titles Error: {e}")

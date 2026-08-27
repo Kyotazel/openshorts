@@ -246,7 +246,7 @@ export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUse
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json();
       setTitles(data.titles || []);
-      setThumbnailTexts([]);
+      setThumbnailTexts(data.thumbnail_texts || []);
       setRecommended([]);
       setChatHistory(prev => [...prev, {
         role: 'assistant',

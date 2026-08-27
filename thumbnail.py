@@ -220,11 +220,15 @@ RULES:
 - Main keyword / subject in the first 3 words
 - Incorporate the user's feedback/direction; if they ask for a style, follow it
 - Specific to this video (names, numbers, tools), never generic
-- Same language as the original content
+- Same language as the original content unless the user asks for another language: then write ALL titles in the requested language
+
+For each title also write its THUMBNAIL TEXT: 1-4 words, ALL CAPS, same language as the title, complementing it (emotion, number or twist), never repeating it.
 
 OUTPUT JSON:
 {{
-    "titles": ["title1", "title2", ...]
+    "titles": ["title1", "title2", ...],
+    "thumbnail_texts": ["...", ... same order],
+    "language": "ISO 639-1 code of the language the titles are written in"
 }}"""
 
     response = client.models.generate_content(
@@ -236,10 +240,15 @@ OUTPUT JSON:
     )
 
     try:
-        return _parse_json(response.text)
+        result = _parse_json(response.text)
+        titles = [t for t in result.get("titles", []) if isinstance(t, str) and t.strip()]
+        texts = [str(t) for t in result.get("thumbnail_texts", [])][:len(titles)]
+        texts += [""] * (len(titles) - len(texts))
+        return {"titles": titles, "thumbnail_texts": texts,
+                "language": str(result.get("language") or "")[:5]}
     except (json.JSONDecodeError, AttributeError):
         print(f"❌ [Thumbnail] Failed to parse refined titles: {response.text}")
-        return {"titles": ["Could not refine titles - please try again"]}
+        return {"titles": ["Could not refine titles - please try again"], "thumbnail_texts": [], "language": ""}
 
 
 # ---------------------------------------------------------------------------
@@ -289,8 +298,11 @@ def extract_face_frames(video_path, session_id, n=5, samples=40):
     for k, cand in enumerate(picked):
         frame = cand["frame"]
         fh, fw = frame.shape[:2]
-        scale = THUMB_W / float(fw)
-        resized = cv2.resize(frame, (THUMB_W, max(2, int(fh * scale))), interpolation=cv2.INTER_AREA)
+        # Keep native resolution up to 1920 wide: the face crop sent as the
+        # person reference comes from this file, and a 500px face gives the
+        # image model too little to keep the likeness.
+        scale = min(1.0, 1920 / float(fw))
+        resized = cv2.resize(frame, (int(fw * scale), max(2, int(fh * scale))), interpolation=cv2.INTER_AREA) if scale < 1.0 else frame
         path = os.path.join(out_dir, f"frame_{k + 1}.jpg")
         cv2.imwrite(path, resized, [cv2.IMWRITE_JPEG_QUALITY, 90])
         results.append({
@@ -362,7 +374,7 @@ def plan_thumbnail_concepts(client, title, count, video_context="", extra_prompt
     go gives N variations of one idea; splitting it gives N ideas.
     """
     person_line = ("A real photo of the presenter is provided and MUST be the focal point, "
-                   "with an exaggerated, readable expression."
+                   "with a clear, natural expression that reads at small size (no caricature)."
                    if has_person else
                    "No photo of the presenter is available: build the thumbnail around an object, "
                    "a scene, a before/after, or a symbol; do NOT invent a specific person's face "
@@ -376,7 +388,9 @@ VIDEO TITLE: "{title}"
 LANGUAGE OF THE AUDIENCE: {language}
 VIDEO CONTEXT: {video_context or "(none)"}
 {person_line}{hint_line}{extra_line}
-Each concept must use a different device, e.g.: big face + huge text; before/after split; object hero shot; number as the hero; pointing at something; contrast of two things; "wrong vs right"; a red circle/arrow on a detail. No two concepts may share the same text or the same layout.
+The thumbnail must show WHAT the video is about, not only how the presenter feels: name the concrete subject (the product, the tool, the result, the numbers) and build the picture around it. A face alone with two words is the lazy default; use it at most once, and only combined with a strong prop or scene.
+
+Each concept must use a different device, e.g.: the presenter + a prop that IS the topic (a phone showing vertical clips, a laptop with the app, a counter/badge with the number); before/after or "long video -> short clips" split; product/UI hero shot with the presenter small; a giant number or stat as the hero with the subject behind; "X vs Y" comparison; a red circle/arrow on a detail; a dramatic reveal with depth (foreground object, blurred background). Layered, cinematic, premium: real props, depth of field, rim light, particles, glow on the key object. Never flat, never a plain wall behind the person. No two concepts may share the same text or the same layout.
 
 Per concept give:
 - "text": 1-4 words, ALL CAPS, in {language}. Complements the title (the title says what, the text says the emotion, the number or the twist). Never repeat the title. No emoji.
@@ -547,7 +561,10 @@ def _generate_one(client, concept, reference_images, out_path, burn_text):
 
 Style: high contrast, saturated colours, crisp subject separation, cinematic lighting, sharp focus on the subject, readable at 168x94 pixels. No clutter, no small details, no borders, no watermark."""
     if reference_images:
-        prompt += "\nUse the provided photo(s) as the person / setting reference: same face, same features, keep them recognisable."
+        prompt += ("\nIDENTITY: the person in the provided photo must appear as EXACTLY the same real person: "
+                   "identical face shape, skin, eyes, glasses, facial hair, hairstyle and hair length, age and "
+                   "body type. Photorealistic, like a photo of them; do not idealize, slim, rejuvenate or "
+                   "stylize them. Expression may change slightly but must stay natural and true to their face.")
 
     response = client.models.generate_content(
         model=IMAGE_MODEL,
