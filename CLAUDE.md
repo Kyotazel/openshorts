@@ -147,6 +147,20 @@ the dashboard offers them as the person reference so the thumbnail shows the
 creator instead of a stranger; an uploaded face photo still wins.
 
 ### Video Reframing Modes
+
+**A source already shot vertical is passed through untouched.**
+`reframe_v2.source_already_fits()` gates it: every layout below reorganises the
+frame to buy back width the crop threw away, and on a 9:16 upload there is none
+to buy. GENERAL was the visible failure — its 0.42 height ratio, which buys
+presence on a landscape source by overflowing the sides, scaled a 1080x1920
+source down to a 453px sliver floating over a blurred copy of itself, and the
+scene classifier routes every face-less shot (a slide, a screen recording) there.
+So the picker is skipped (one Gemini call saved per upload), the classifier is
+skipped, and every scene renders TRACK, whose crop is the whole frame.
+`general_filtergraph` additionally floors the foreground at the height where the
+source fills the output width, so the editor's explicit GENERAL override on a
+portrait clip cannot reproduce the shrink either.
+
 - **TRACK Mode** (single subject): MediaPipe face detection + YOLOv8 fallback with "Heavy Tripod" stabilization
 - **GENERAL Mode** (groups/landscapes): Blurred background layout preserving full width
 - **SPLIT Mode** (two-shot conversation, `split_layout.py`): both speakers stacked

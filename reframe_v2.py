@@ -64,6 +64,18 @@ def delivery_size(orig_w, orig_h, aspect_ratio):
     return out_w + (out_w % 2), out_h + (out_h % 2)
 
 
+def source_already_fits(orig_w, orig_h, aspect_ratio, tol=0.01):
+    """True when the source is already at (or past) the target aspect.
+
+    Such a source has no width to throw away, so every layout that rearranges
+    the frame is a downgrade: GENERAL puts it in a blurred bed, SPLIT stacks
+    two crops of an already-narrow frame, SCREENCAST/INSET carve panels out of
+    it. TRACK is the only one that leaves it alone — its crop is the whole
+    frame — so a vertical upload should pass straight through.
+    """
+    return orig_w / float(orig_h) <= aspect_ratio * (1 + tol)
+
+
 def dedupe_sendcmd_lines(xs, fps, target="crop@c"):
     """sendcmd lines setting crop x per frame, deduped to change-points.
 
@@ -123,7 +135,7 @@ def full_width_content_height(orig_w, orig_h, out_w):
     return fg_h + (fg_h % 2)
 
 
-def general_filtergraph(out_w, out_h, content_h=None):
+def general_filtergraph(out_w, out_h, content_h=None, orig_w=None, orig_h=None):
     """Blurred-background 'general shot' layout: bg fills the frame (centre-
     cropped, blurred), fg is scaled to a readable share of the height and
     centred, overflowing the sides rather than floating small in the middle.
@@ -132,8 +144,16 @@ def general_filtergraph(out_w, out_h, content_h=None):
     turns the side-cropping off entirely, which is what a scene full of charts
     or spreadsheets needs: the default 0.42 ratio buys presence by throwing away
     ~24% of the width, and on that material the discarded columns are the point.
+
+    ``orig_w``/``orig_h`` floor the foreground at the height where the source
+    fills the output width. The 0.42 ratio buys presence on a LANDSCAPE source
+    by overflowing the sides; on a portrait one the same number is a shrink —
+    an already-9:16 upload came back as a 453px sliver floating over a blurred
+    copy of itself. Filling the width is the floor, never the target.
     """
     fg_h = content_h if content_h else int(out_h * GENERAL_CONTENT_HEIGHT_RATIO)
+    if orig_w and orig_h:
+        fg_h = max(fg_h, full_width_content_height(orig_w, orig_h, out_w))
     fg_h += fg_h % 2
     return (
         f"[0:v]split=2[bga][fga];"
@@ -358,10 +378,21 @@ def render(input_video, final_output_video, aspect_ratio, content_ranges=None,
         scenes = [(FrameTimecode(0, fps), FrameTimecode(total, fps))]
 
     scene_boundaries = [(s.get_frames(), e.get_frames()) for s, e in scenes]
+    # A source shot vertical is already the output: nothing to reframe. The
+    # scene classifier still sends its face-less shots (a slide, a chart, a
+    # screen recording) to GENERAL, and GENERAL on such a source shrank the
+    # whole frame into the middle of a blurred copy of itself. Skip the
+    # classifier and every layout upgrade instead of trying to survive them.
+    passthrough = source_already_fits(orig_w, orig_h, aspect_ratio)
     if force_strategy:
         strategies = [force_strategy] * len(scenes)
         content_ranges = []  # no screencast/inset upgrades over an explicit choice
         print(f"   🎯 Framing override: every scene -> {force_strategy}")
+    elif passthrough:
+        strategies = ['TRACK'] * len(scenes)
+        content_ranges = []
+        print(f"   ↕️  Source is already {orig_w}x{orig_h} vertical — "
+              f"passing it through, no reframe")
     else:
         strategies = m.analyze_scenes_strategy(input_video, scenes)
 
@@ -372,8 +403,9 @@ def render(input_video, final_output_video, aspect_ratio, content_ranges=None,
     # that begin past the last decoded frame, and those get dropped).
     splits = {}
     split_scene_of = {}
-    for scene_idx, centres in split_layout.detect_split_scenes(
-            input_video, scenes, strategies).items():
+    detected_splits = {} if passthrough else split_layout.detect_split_scenes(
+        input_video, scenes, strategies)
+    for scene_idx, centres in detected_splits.items():
         strategies[scene_idx] = 'SPLIT'
         start_f = scene_boundaries[scene_idx][0]
         splits[start_f] = centres
@@ -513,7 +545,8 @@ def render(input_video, final_output_video, aspect_ratio, content_ranges=None,
                 graph = split_layout.split_filtergraph(
                     orig_w, orig_h, out_w, out_h, left, right)
             elif strategy == 'GENERAL':
-                graph = general_filtergraph(out_w, out_h)
+                graph = general_filtergraph(out_w, out_h,
+                                            orig_w=orig_w, orig_h=orig_h)
             else:
                 seg_xs = [x if x is not None else 0 for x in xs[start_f:end_f]]
                 cmd_path = os.path.join(workdir, f"cmd_{idx:03d}.txt")
@@ -527,7 +560,13 @@ def render(input_video, final_output_video, aspect_ratio, content_ranges=None,
                     init = f"w={first[0]}:h={first[1]}:x={first[2]}:y={first[3]}"
                 else:
                     lines = dedupe_sendcmd_lines(seg_xs, fps)
-                    init = f"w={crop_w}:h={crop_h}:x={seg_xs[0]}:y=0"
+                    # sendcmd only ever moves x, so y is whatever it starts as.
+                    # crop_h equals the source height on any landscape input,
+                    # making this 0; it only bites on a source TALLER than the
+                    # target, where y=0 threw away the bottom of the frame
+                    # instead of trimming both ends.
+                    crop_y = max(0, (orig_h - crop_h) // 2)
+                    init = f"w={crop_w}:h={crop_h}:x={seg_xs[0]}:y={crop_y}"
                 with open(cmd_path, "w") as f:
                     f.write("\n".join(lines) + "\n")
                 graph = (

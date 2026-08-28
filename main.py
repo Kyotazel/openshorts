@@ -522,10 +522,18 @@ def create_general_frame(frame, output_width, output_height):
     scale = output_width / orig_w
     fg_h = int(orig_h * scale)
     foreground = cv2.resize(frame, (output_width, fg_h), interpolation=cv2.INTER_LINEAR)
-    
+
+    # A source taller than the output fills the width at a height that does not
+    # fit: centre-crop it instead of indexing the frame with a negative offset,
+    # which raises rather than renders.
+    if fg_h > output_height:
+        top = (fg_h - output_height) // 2
+        foreground = foreground[top:top + output_height, :]
+        fg_h = output_height
+
     # 3. Overlay
     y_offset = (output_height - fg_h) // 2
-    
+
     # Clone background to avoid modifying it
     final_frame = background.copy()
     final_frame[y_offset:y_offset+fg_h, :] = foreground
@@ -1788,8 +1796,17 @@ if __name__ == '__main__':
             _cap = cv2.VideoCapture(input_video)
             _fps = _cap.get(cv2.CAP_PROP_FPS) or 30.0
             _duration = int(_cap.get(cv2.CAP_PROP_FRAME_COUNT)) / _fps
+            _w = int(_cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            _h = int(_cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
             _cap.release()
-            layout_picker.pick_and_apply(input_video, _duration)
+            from reframe_v2 import source_already_fits  # imports main back
+            # A source already shot vertical has no width to reorganise, and
+            # the render passes it through whatever the model says. Asking
+            # anyway costs a Gemini call per upload to be ignored.
+            if _w and _h and source_already_fits(_w, _h, ASPECT_RATIO):
+                print(f"   ↕️  Source is {_w}x{_h} — already vertical, no layout to pick.")
+            else:
+                layout_picker.pick_and_apply(input_video, _duration)
         except Exception as e:
             print(f"⚠️ Layout choice skipped ({e}) — using the default layout.")
 

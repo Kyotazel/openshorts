@@ -5,6 +5,7 @@ from reframe_v2 import (
     delivery_size,
     general_filtergraph,
     scene_frame_ranges,
+    source_already_fits,
 )
 
 VERTICAL = 9 / 16
@@ -125,3 +126,48 @@ class TestGeneralLayout:
         from reframe_v2 import GENERAL_CONTENT_HEIGHT_RATIO
         scaled_w = 1920 * GENERAL_CONTENT_HEIGHT_RATIO * (16 / 9)
         assert 1080 / scaled_w > 0.70, "keeps less than 70% of the source width"
+
+
+class TestVerticalSource:
+    """An already-vertical upload used to come back shrunk into a blurred bed.
+
+    The scene classifier sends face-less shots (a slide, a screen recording) to
+    GENERAL, and GENERAL scaled the content to 42% of the frame height — on a
+    9:16 source that is 453px of 1080, floating over a blurred copy of itself.
+    """
+
+    def test_vertical_source_needs_no_reframe(self):
+        assert source_already_fits(1080, 1920, VERTICAL)
+        assert source_already_fits(720, 1280, VERTICAL)
+        assert source_already_fits(1080, 2400, VERTICAL)  # taller than 9:16
+
+    def test_landscape_and_squarish_sources_still_reframe(self):
+        assert not source_already_fits(1920, 1080, VERTICAL)
+        assert not source_already_fits(1080, 1080, VERTICAL)
+        assert not source_already_fits(1080, 1350, VERTICAL)  # 4:5 has width to cut
+
+    def test_general_never_renders_the_source_narrower_than_the_frame(self):
+        # 1080x1920 in a 1080x1920 frame: the foreground must fill it, not sit
+        # at 0.42 * 1920 = 806 (453px wide).
+        graph = general_filtergraph(1080, 1920, orig_w=1080, orig_h=1920)
+        assert "[fga]scale=-2:1920," in graph
+
+    def test_portrait_source_fills_the_width(self):
+        # 4:5 source: full width is reached at 1350, well above the 806 default.
+        graph = general_filtergraph(1080, 1920, orig_w=1080, orig_h=1350)
+        assert "[fga]scale=-2:1350," in graph
+
+    def test_landscape_keeps_the_presence_ratio(self):
+        # The floor must not disturb the case the ratio was tuned for: a 16:9
+        # source fills the width at 608, below the 806 the ratio asks for.
+        from reframe_v2 import GENERAL_CONTENT_HEIGHT_RATIO
+        expected = int(1920 * GENERAL_CONTENT_HEIGHT_RATIO)
+        expected += expected % 2
+        graph = general_filtergraph(1080, 1920, orig_w=1920, orig_h=1080)
+        assert f"[fga]scale=-2:{expected}," in graph
+
+    def test_floor_keeps_the_height_even(self):
+        for orig_h in (1919, 1351, 1233):
+            graph = general_filtergraph(1080, 1920, orig_w=1080, orig_h=orig_h)
+            h = int(graph.split("[fga]scale=-2:")[1].split(",")[0])
+            assert h % 2 == 0, (orig_h, h)
