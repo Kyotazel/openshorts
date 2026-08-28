@@ -9,6 +9,7 @@ from clip_selection import (
     snap_clip_to_words,
     compact_words,
     lookup_model_prices,
+    trim_to_best,
 )
 
 
@@ -163,3 +164,54 @@ class TestDetailPromptCarriesTheCount:
         # The JSON schema example legitimately keeps braces (they are {{ }} in
         # the template), so assert on unsubstituted placeholders specifically.
         assert re.findall(r"\{[a-z_]+\}", prompt) == []
+
+
+class TestTrimToBest:
+    """The detail pass returns clips in transcript order. Slicing that list
+    kept the earliest ones and dropped the back of the video — measured on a
+    9m19s walkthrough whose clips all landed inside the first 2m40s."""
+
+    @staticmethod
+    def _clip(start, score):
+        return {"start": start, "end": start + 20, "predicted_score": score}
+
+    def test_keeps_the_best_scoring_not_the_earliest(self):
+        shorts = [self._clip(0, 60), self._clip(30, 55),
+                  self._clip(300, 90), self._clip(400, 85)]
+        kept = trim_to_best(shorts, 2)
+        assert [c["start"] for c in kept] == [300, 400]
+
+    def test_survivors_come_back_in_transcript_order(self):
+        shorts = [self._clip(0, 99), self._clip(100, 10),
+                  self._clip(200, 80), self._clip(300, 90)]
+        kept = trim_to_best(shorts, 3)
+        assert [c["start"] for c in kept] == [0, 200, 300]
+
+    def test_a_short_list_is_untouched(self):
+        shorts = [self._clip(0, 10), self._clip(50, 20)]
+        assert trim_to_best(shorts, 5) == shorts
+        assert trim_to_best(shorts, 2) == shorts
+
+    def test_the_whole_video_stays_reachable(self):
+        # The regression in one line: 16 clips spread over 9 minutes, trimmed
+        # to 8. A positional slice ends at 3:30; by score the tail survives.
+        shorts = [self._clip(i * 35, 50 + (i % 4) * 10) for i in range(16)]
+        kept = trim_to_best(shorts, 8)
+        assert max(c["start"] for c in kept) > 8 * 35
+
+    def test_ties_keep_transcript_order(self):
+        shorts = [self._clip(0, 70), self._clip(100, 70), self._clip(200, 70)]
+        assert [c["start"] for c in trim_to_best(shorts, 2)] == [0, 100]
+
+    def test_a_missing_or_bad_score_does_not_raise(self):
+        shorts = [{"start": 0, "end": 20},
+                  {"start": 100, "end": 120, "predicted_score": None},
+                  {"start": 200, "end": 220, "predicted_score": "x"},
+                  self._clip(300, 40)]
+        kept = trim_to_best(shorts, 2)
+        assert len(kept) == 2
+        assert kept[-1]["start"] == 300      # the only real score survives
+
+    def test_max_clips_is_never_below_one(self):
+        shorts = [self._clip(0, 10), self._clip(50, 20)]
+        assert len(trim_to_best(shorts, 0)) == 1

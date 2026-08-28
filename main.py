@@ -24,7 +24,8 @@ from google.genai import types as genai_types
 import gemini_worker
 import layout_picker
 from clip_selection import (build_transcript_windows, clip_count_targets,
-                            clip_duration_bounds, snap_clip_to_words)
+                            clip_duration_bounds, snap_clip_to_words,
+                            trim_to_best)
 from ffmpeg_utils import (video_encode_args, audio_encode_args, QUALITY,
                           QUALITY_FAST, METADATA_SCRUB)
 from dotenv import load_dotenv
@@ -1586,7 +1587,13 @@ def get_viral_clips(transcript_result, video_duration):
         shorts = _run_stage_split(client, model_name, shortlist, _detail_prompt,
                                   gemini_worker.DetailResponse, "shorts", costs, "detail")
         if len(shorts) > max_clips:
-            shorts = shorts[:max_clips]
+            # By score, never by position: the results arrive in transcript
+            # order, so slicing kept the earliest clips and silently dropped
+            # the back half of the video. See trim_to_best.
+            dropped = len(shorts) - max_clips
+            shorts = trim_to_best(shorts, max_clips)
+            print(f"   Kept the {max_clips} best-scoring clip(s) of "
+                  f"{max_clips + dropped}.")
         # Snap each proposed clip onto real word boundaries (+ a bit of silence).
         for s in shorts:
             ns, ne = snap_clip_to_words(s.get("start", 0), s.get("end", 0), words, video_duration,

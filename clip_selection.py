@@ -67,6 +67,41 @@ def clip_count_targets(n_windows):
     return low, max(low, high)
 
 
+def trim_to_best(shorts, max_clips):
+    """Cut an over-long detail-pass result down to ``max_clips`` BY SCORE.
+
+    The detail pass hands its clips back in transcript order, batch after
+    batch, so slicing the list keeps the EARLIEST clips rather than the best
+    ones. On a 9-minute walkthrough that quietly threw away everything past
+    minute three: the model proposed clips across the whole video, and the
+    ones covering the demo, the MCP walkthrough and the close were the tail
+    that got dropped. Worse, the failure scales the wrong way — the more
+    generous the model is, the more of the video disappears.
+
+    That sabotages the windowing: get_viral_clips builds scoring windows
+    precisely because "a single call over the whole transcript clusters picks
+    near the start", and a positional slice puts the clustering right back.
+
+    Ranking is by ``predicted_score`` (the detail prompt already asks for it,
+    and nothing else was reading it here). Ties keep transcript order, and the
+    survivors come back in transcript order too, so clip numbering still runs
+    front to back the way every caller downstream expects.
+    """
+    max_clips = max(1, int(max_clips or 1))
+    if len(shorts) <= max_clips:
+        return list(shorts)
+
+    def score(item):
+        try:
+            return float(item[1].get("predicted_score") or 0)
+        except (TypeError, ValueError, AttributeError):
+            return 0.0
+
+    indexed = list(enumerate(shorts))
+    best = sorted(indexed, key=score, reverse=True)[:max_clips]
+    return [item for _, item in sorted(best, key=lambda pair: pair[0])]
+
+
 def clip_duration_bounds():
     """The clip length band (seconds) the selection prompts and word-snapping
     enforce. ``CLIP_MIN_SECONDS`` / ``CLIP_MAX_SECONDS`` override the classic
