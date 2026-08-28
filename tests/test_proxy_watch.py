@@ -20,6 +20,7 @@ def _run(coro):
 def _reset_state(monkeypatch):
     alerts._watch_down.clear()
     alerts._watch_nag.clear()
+    alerts._watch_strikes.clear()
     alerts._last_alert.clear()
     sent = []
 
@@ -30,6 +31,7 @@ def _reset_state(monkeypatch):
     yield sent
     alerts._watch_down.clear()
     alerts._watch_nag.clear()
+    alerts._watch_strikes.clear()
 
 
 def _probes(results):
@@ -86,36 +88,45 @@ class TestWatchTick:
             "http://s1": (False, "boom"), "http://s2": (False, "boom"),
             "http://paid": (True, "")}))
         _run(alerts.proxy_watch_tick())
-        _run(alerts.proxy_watch_tick())  # renotify window not due yet
+        assert _reset_state == []  # one miss is not an outage
+        _run(alerts.proxy_watch_tick())
         assert len(_reset_state) == 1
         subject, body = _reset_state[0]
-        assert alerts._STATIC_TARGET in subject and "DOWN" in subject
+        # The statics being down while the paid proxy answers is a cost
+        # warning, not an outage — hence "down" rather than "DOWN".
+        assert alerts._STATIC_TARGET in subject and "down" in subject.lower()
         assert "costs money" in body
 
     def test_paid_down_alerts_and_nags_after_window(self, _reset_state, monkeypatch):
         self._env(monkeypatch, statics=None)
         monkeypatch.setattr(alerts, "_probe_one", _probes({
             "http://paid": (False, "HTTP 407")}))
-        _run(alerts.proxy_watch_tick())
+        for _ in range(alerts._PROXY_STRIKES):
+            _run(alerts.proxy_watch_tick())
         alerts._watch_nag[alerts._PAID_TARGET] -= alerts._PROXY_RENOTIFY + 1
         _run(alerts.proxy_watch_tick())
         assert len(_reset_state) == 2
-        assert "STILL down" in _reset_state[1][0]
+        # The nag repeats the headline and adds how long it has been down.
+        assert alerts._PAID_TARGET in _reset_state[1][0]
+        assert "h)" in _reset_state[1][0]
 
     def test_recovery_confirms_and_resets(self, _reset_state, monkeypatch):
         self._env(monkeypatch, statics=None)
         monkeypatch.setattr(alerts, "_probe_one", _probes({
             "http://paid": (False, "HTTP 407")}))
-        _run(alerts.proxy_watch_tick())
+        for _ in range(alerts._PROXY_STRIKES):
+            _run(alerts.proxy_watch_tick())
         monkeypatch.setattr(alerts, "_probe_one", _probes({
             "http://paid": (True, "")}))
         _run(alerts.proxy_watch_tick())
         assert any("recovered" in s for s, _ in _reset_state)
         assert not alerts._watch_down.get(alerts._PAID_TARGET)
-        # A later failure is a NEW incident and alerts again.
+        # A later failure is a NEW incident: strikes were reset by the
+        # recovery, so it has to miss twice again before it alerts.
         monkeypatch.setattr(alerts, "_probe_one", _probes({
             "http://paid": (False, "HTTP 407")}))
-        _run(alerts.proxy_watch_tick())
+        for _ in range(alerts._PROXY_STRIKES):
+            _run(alerts.proxy_watch_tick())
         assert sum("DOWN" in s for s, _ in _reset_state) == 2
 
 
