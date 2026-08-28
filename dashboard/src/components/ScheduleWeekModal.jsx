@@ -3,6 +3,7 @@ import { Loader2, Calendar, CheckCircle, AlertCircle, Video, Instagram, Youtube,
 import { apiFetch } from '../lib/api';
 import Modal from './ui/Modal';
 import SegmentedControl from './ui/SegmentedControl';
+import TikTokDraftNotice from './TikTokDraftNotice';
 
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -334,6 +335,12 @@ export default function ScheduleWeekModal({ isOpen, onClose, clips, jobId, uploa
                     })}
                 />
             </div>
+
+            {/* A whole week of tiktok posts is a whole week of silent drafts:
+                this modal writes no captions of its own either (it sends the
+                clip's generated title/description), and tiktok keeps none of
+                them on a draft. Say it before the button, not after. */}
+            {platforms.tiktok && !scheduling && !done && <TikTokDraftNotice />}
 
             {/* Progress bar */}
             {(scheduling || done) && (

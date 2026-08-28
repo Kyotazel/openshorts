@@ -8,6 +8,7 @@ import TranslateModal from './TranslateModal';
 import Modal from './ui/Modal';
 import SegmentedControl from './ui/SegmentedControl';
 import WatermarkModal, { watermarkNoticeDismissed } from './WatermarkModal';
+import TikTokDraftNotice from './TikTokDraftNotice';
 import { useAuth } from '../contexts/AuthContext';
 import { renderInBrowser } from '../lib/renderInBrowser';
 
@@ -1009,21 +1010,10 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
                     </div>
                 )}
 
-                {/* TikTok is sent as a draft, so say so before they press publish:
-                    someone expecting a live post and finding nothing on their
-                    profile will read it as a failure. Lead with the upside —
-                    posting from inside the app is what the algorithm rewards. */}
-                {platforms.tiktok && (
-                    <div className="mb-4 px-3 py-2 rounded-input text-xs text-ink2 bg-paper3 flex items-start gap-2">
-                        <AlertCircle size={14} className="mt-0.5 shrink-0 text-brass" />
-                        <div className="lowercase">
-                            tiktok arrives as a <b className="text-ink">draft</b>, not a live post — you'll
-                            get a notification in the app. finishing it there lets you add trending
-                            sounds, effects and hashtags, which reaches more people than posting
-                            straight from an api.
-                        </div>
-                    </div>
-                )}
+                {/* Both the title/description fields below and the schedule
+                    button are downstream of this: on a tiktok draft neither
+                    travels. See TikTokDraftNotice. */}
+                {platforms.tiktok && <TikTokDraftNotice />}
 
                 <div className="space-y-4">
                     {/* Title & Description */}
