@@ -34,7 +34,7 @@ const DOCS = [
     {
         icon: RotateCcw,
         title: 'Refund Policy',
-        desc: 'Ask within 14 days of any charge and we refund it in full, no reason needed and no usage deducted.',
+        desc: 'Charged in the last 14 days and have not used the service since? We refund it in full, no reason needed.',
         href: '/refunds',
         es: '/reembolsos',
     },
@@ -72,7 +72,7 @@ export default function Legal() {
                         <li><strong className="text-ink">Your videos and clips are yours.</strong> We never use your content to train AI models.</li>
                         <li><strong className="text-ink">You must have the rights</strong> to every video you upload or link, and you are the publisher of what you post.</li>
                         <li><strong className="text-ink">No third-party trackers.</strong> Analytics is self-hosted; free-plan clips are deleted after 7 days.</li>
-                        <li><strong className="text-ink">Cancel anytime</strong> from your account, and ask within 14 days of any charge for a full refund. EU consumers keep their 14-day withdrawal right on top.</li>
+                        <li><strong className="text-ink">Cancel anytime</strong> from your account. Charged in the last 14 days and never used it? Full refund. EU consumers keep their 14-day withdrawal right on top of that.</li>
                         <li><strong className="text-ink">Delete everything anytime.</strong> Account &rarr; Delete account erases your projects, clips and keys on the spot. No email to us, no waiting.</li>
                     </ul>
                     <p>

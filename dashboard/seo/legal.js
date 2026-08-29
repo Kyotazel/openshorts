@@ -124,12 +124,15 @@ similar outputs for different customers, so results are not guaranteed to be
 unique. You are responsible for reviewing AI output before you use or publish
 it. You may not use the service or its output to develop or train a competing
 model or service.</p>
-<p>Clips that use AI dubbing contain synthetic speech. We label and mark dubbed
-clips as AI-generated as required of us by Regulation (EU) 2024/1689 (the AI
-Act); you must not remove or strip those labels, marks or content credentials.
-When you publish a dubbed clip, disclosing its synthetic nature to your
-audience in the manner your platform and local law require is your
-responsibility as the publisher.</p>
+<p>Clips that use AI dubbing contain synthetic speech, and so do videos made
+with an AI actor. We mark those files as AI-generated in a machine-readable
+format, which is what Article 50(2) of Regulation (EU) 2024/1689 (the AI Act)
+requires of us as the provider; you must not remove or strip that marking. We
+do not burn a visible label into the picture. When you publish one of those
+clips, revealing to your audience that it is artificially generated is your own
+duty as the deployer under Article 50(4), and the AI-content label each
+platform offers (TikTok, Instagram, YouTube and the rest) is the normal way to
+discharge it.</p>
 
 <h2>8. Acceptable use</h2>
 <p>You may not use the service to:</p>
@@ -233,10 +236,11 @@ Automatic renewals of an ongoing subscription do not open a new withdrawal
 period. To withdraw, email info@openshorts.app or use the model form we include
 in your confirmation email; refunds are issued to the original payment method
 within 14 days.</p>
-<p>In practice our <a href="/refunds">refund policy</a> is more generous than
-this and is what you will actually get: within 14 days of any charge we refund
-it in full, without deducting the part of the service you already used. This
-section describes the legal floor, not the ceiling.</p>
+<p>Separately from this right, our <a href="/refunds">refund policy</a> returns
+your most recent charge in full if you have not used the service since it was
+taken, which covers the renewal nobody noticed. The two do different jobs: the
+statutory right above is the one that helps you when you did use some of your
+minutes, because it is not conditional on leaving the service untouched.</p>
 
 <h2>13. Content retention and deletion</h2>
 <p>Generated clips on the free plan are stored for 7 days and then permanently
@@ -396,12 +400,15 @@ y entradas similares pueden producir salidas similares para distintos clientes,
 por lo que los resultados no se garantizan únicos. Eres responsable de revisar
 el resultado antes de usarlo o publicarlo. No puedes usar el servicio ni sus
 resultados para desarrollar o entrenar un modelo o servicio competidor.</p>
-<p>Los clips con doblaje de IA contienen voz sintética. Etiquetamos y marcamos
-los clips doblados como generados con IA según nos exige el Reglamento (UE)
-2024/1689 (Reglamento de IA); no debes eliminar esas etiquetas, marcas ni
-credenciales de contenido. Al publicar un clip doblado, informar a tu audiencia
-de su naturaleza sintética en la forma que exijan tu plataforma y tu ley local
-es tu responsabilidad como editor.</p>
+<p>Los clips con doblaje de IA contienen voz sintética, y también los vídeos
+hechos con un actor de IA. Marcamos esos ficheros como generados con IA en un
+formato legible por máquina, que es lo que nos exige a nosotros como proveedor
+el artículo 50.2 del Reglamento (UE) 2024/1689 (Reglamento de IA); no debes
+eliminar esa marca. No quemamos una etiqueta visible sobre la imagen. Al
+publicar uno de esos clips, revelar a tu audiencia que es contenido generado
+artificialmente es tu propia obligación como responsable del despliegue según
+el artículo 50.4, y la etiqueta de contenido con IA que ofrece cada plataforma
+(TikTok, Instagram, YouTube y las demás) es la forma normal de cumplirla.</p>
 
 <h2>8. Uso aceptable</h2>
 <p>No puedes usar el servicio para:</p>
@@ -510,11 +517,11 @@ el derecho se pierde una vez el servicio se ha ejecutado por completo
 un nuevo plazo de desistimiento. Para desistir, escribe a info@openshorts.app o
 usa el formulario modelo que incluimos en tu email de confirmación; los
 reembolsos se emiten al medio de pago original en un máximo de 14 días.</p>
-<p>En la práctica nuestra <a href="/reembolsos">política de reembolsos</a> es
-más generosa que esto y es la que se te va a aplicar: dentro de los 14 días
-siguientes a cualquier cargo lo devolvemos entero, sin descontar la parte del
-servicio que ya hayas consumido. Este apartado describe el suelo legal, no el
-techo.</p>
+<p>Al margen de este derecho, nuestra <a href="/reembolsos">política de
+reembolsos</a> devuelve íntegro tu último cargo si no has usado el servicio
+desde que se cobró, que es el caso de la renovación que a nadie le sonó. Cada
+una sirve para algo distinto: el derecho legal de arriba es el que te ayuda si
+sí consumiste minutos, porque no exige que hayas dejado el servicio intacto.</p>
 
 <h2>13. Conservación y eliminación del contenido</h2>
 <p>Los clips generados en el plan gratuito se conservan 7 días y después se
@@ -1126,79 +1133,104 @@ España.</p>
 
 const REFUNDS_EN = `
 <h2>The short version</h2>
-<p>Ask within <strong>14 days of a charge</strong> and we refund it in full. No
-reason needed, no form to fill in, no questions about how much of the service
-you used. One email is enough.</p>
-<p>This covers every charge: your first subscription payment, each renewal, and
-minute top-ups.</p>
+<p>If you were charged in the last <strong>14 days</strong> and you have not
+used the service since that charge, ask us and we refund it in full. No reason
+needed and no form to fill in.</p>
+<p>This is the "I did not notice the renewal" policy, and it is the case it is
+built for: the payment went through, you never opened the app, and you should
+not be out of pocket for it.</p>
+
+<h2>What exactly is covered</h2>
+<ul>
+<li><strong>Your most recent charge</strong>, whether that is a first
+subscription payment, a renewal or a minute top-up. Earlier charges are not
+refundable under this policy.</li>
+<li><strong>Within 14 days</strong> of that charge landing.</li>
+<li><strong>Provided you have not used the service since it.</strong> Used
+means minutes spent: a video processed, a clip generated, a dub or a thumbnail
+made. Signing in and looking around is not using it.</li>
+</ul>
+<p>If you did use some of your minutes, this policy does not apply, but your
+legal rights below may still get you money back.</p>
 
 <h2>How to ask</h2>
 <p>Email <strong>info@openshorts.app</strong> from the address your account
-uses and say you want a refund. If you have the invoice number, include it; if
-you do not, we will find the charge. We reply the same working day.</p>
+uses and say you want a refund. We check the date of the charge and whether any
+minutes were spent after it, and we reply the same working day.</p>
 
 <h2>When you get the money</h2>
 <p>We issue the refund to the original payment method within 14 days of your
-request, and normally the same day. Your bank or card issuer then takes its own
-time to show it, usually 5 to 10 working days. That last stretch is outside our
-control.</p>
+request, and normally the same day. Your bank or card issuer then takes 5 to 10
+working days to show it, which is outside our control.</p>
 <p>Refunding a subscription payment also cancels the subscription, so you are
-not charged again. If you only want to stop future payments and keep using what
+not charged again. If you would rather stop future payments and keep using what
 you already paid for, cancel from <strong>Account</strong> instead: your plan
-runs to the end of the period you paid.</p>
+runs to the end of the period you paid for.</p>
 
 <h2>The one exception</h2>
 <p>We do not refund an account terminated for abuse: uploading illegal content,
-repeat copyright infringement, or trying to defraud the service. Everything
-else is refundable within the 14 days, including "I changed my mind" and "I
-processed all my videos and it was not what I hoped for".</p>
+repeat copyright infringement, or trying to defraud the service.</p>
 
-<h2>This sits on top of your legal rights</h2>
-<p>If you are a consumer in the EU you also have the statutory right of
-withdrawal described in section 12 of our <a href="/terms">Terms of
-Service</a>. That right entitles you to a refund of the part of the service you
-have not used. This policy is more generous, because it refunds the whole
-charge, so in practice it is the one that applies. Nothing here reduces any
-right the law gives you.</p>
+<h2>Your legal rights are separate, and they may be better</h2>
+<p>If you are a consumer in the EU you have the statutory right of withdrawal
+described in section 12 of our <a href="/terms">Terms of Service</a>. That
+right lasts 14 days too, but it does <strong>not</strong> require that you left
+the service unused: if you did use some of it, you can still withdraw and pay
+only the proportional part of what you consumed. So if you have spent minutes,
+ask for that instead. Nothing on this page takes it away from you, and we will
+point you to it rather than let you lose it.</p>
 `
 
 const REFUNDS_ES = `
 <h2>La versión corta</h2>
-<p>Pídelo dentro de los <strong>14 días siguientes a un cargo</strong> y te lo
-devolvemos entero. Sin justificación, sin formularios y sin preguntarte cuánto
-has usado el servicio. Basta con un email.</p>
-<p>Cubre todos los cargos: el primer pago de la suscripción, cada renovación y
-las recargas de minutos.</p>
+<p>Si te hemos cobrado en los últimos <strong>14 días</strong> y no has usado el
+servicio desde ese cargo, pídelo y te lo devolvemos entero. Sin justificación y
+sin formularios.</p>
+<p>Esta es la política del "no me di cuenta de la renovación", y es justo el
+caso para el que está pensada: el pago pasó, no llegaste a abrir la aplicación,
+y no tienes por qué quedarte sin ese dinero.</p>
+
+<h2>Qué cubre exactamente</h2>
+<ul>
+<li><strong>Tu último cargo</strong>, sea el primer pago de una suscripción, una
+renovación o una recarga de minutos. Los cargos anteriores no entran en esta
+política.</li>
+<li><strong>Dentro de los 14 días</strong> siguientes a ese cargo.</li>
+<li><strong>Siempre que no hayas usado el servicio desde entonces.</strong> Usar
+significa gastar minutos: procesar un vídeo, generar un clip, doblar o crear una
+miniatura. Entrar y mirar no cuenta como usarlo.</li>
+</ul>
+<p>Si sí gastaste minutos, esta política no se aplica, pero tus derechos legales
+de más abajo pueden devolverte dinero igualmente.</p>
 
 <h2>Cómo pedirlo</h2>
 <p>Escribe a <strong>info@openshorts.app</strong> desde la dirección de tu
-cuenta y dinos que quieres el reembolso. Si tienes el número de factura,
-inclúyelo; si no, ya localizamos nosotros el cargo. Respondemos el mismo día
-laborable.</p>
+cuenta y dinos que quieres el reembolso. Comprobamos la fecha del cargo y si se
+gastaron minutos después, y respondemos el mismo día laborable.</p>
 
 <h2>Cuándo llega el dinero</h2>
-<p>Emitimos el reembolso al medio de pago original en un máximo de 14 días
-desde tu solicitud, y normalmente el mismo día. Después, tu banco o tu emisora
-de tarjeta se toma su tiempo en reflejarlo, entre 5 y 10 días hábiles. Ese
-último tramo no está en nuestra mano.</p>
+<p>Emitimos el reembolso al medio de pago original en un máximo de 14 días desde
+tu solicitud, y normalmente el mismo día. Después tu banco o tu emisora de
+tarjeta tarda entre 5 y 10 días hábiles en reflejarlo, y ese tramo no está en
+nuestra mano.</p>
 <p>Reembolsar un pago de suscripción la cancela también, así que no se te vuelve
-a cobrar. Si lo que quieres es solo dejar de pagar y seguir usando lo que ya
-pagaste, cancela desde <strong>Cuenta</strong>: tu plan sigue hasta el final del
-periodo abonado.</p>
+a cobrar. Si lo que quieres es dejar de pagar y seguir usando lo que ya pagaste,
+cancela desde <strong>Cuenta</strong>: tu plan sigue hasta el final del periodo
+abonado.</p>
 
 <h2>La única excepción</h2>
 <p>No reembolsamos una cuenta cancelada por abuso: subir contenido ilícito,
 infringir derechos de autor de forma reiterada o intentar defraudar al
-servicio. Todo lo demás entra dentro de los 14 días, incluido "he cambiado de
-idea" y "he procesado todos mis vídeos y no era lo que esperaba".</p>
+servicio.</p>
 
-<h2>Esto se suma a tus derechos legales</h2>
-<p>Si eres consumidor en la UE tienes además el derecho de desistimiento que
-describe el apartado 12 de nuestros <a href="/terminos">Términos de
-Servicio</a>, que te permite recuperar la parte del servicio que no has
-consumido. Esta política es más generosa, porque devuelve el cargo completo, así
-que en la práctica es la que se aplica. Nada de aquí recorta ningún derecho que
-te dé la ley.</p>
+<h2>Tus derechos legales van aparte, y pueden ser mejores</h2>
+<p>Si eres consumidor en la UE tienes el derecho de desistimiento que describe
+el apartado 12 de nuestros <a href="/terminos">Términos de Servicio</a>. Ese
+derecho dura también 14 días, pero <strong>no</strong> exige que hayas dejado el
+servicio sin usar: si consumiste parte, puedes desistir igualmente y abonar solo
+la parte proporcional de lo consumido. Así que si gastaste minutos, pide eso.
+Nada de esta página te lo quita, y te lo recordaremos antes de dejar que lo
+pierdas.</p>
 `
 
 export function legalPages() {
@@ -1335,15 +1367,15 @@ export function legalPages() {
       path: '/refunds',
       title: 'Refund Policy | OpenShorts',
       description:
-        'Ask within 14 days of any charge and OpenShorts refunds it in full, no reason needed. How to ask, when the money lands, and how this sits on top of EU withdrawal rights.',
+        'Charged in the last 14 days and have not used the service since? OpenShorts refunds it in full. What counts as used, how to ask, and how EU withdrawal rights cover the rest.',
       h1: 'Refund Policy',
       breadcrumb: [{ name: 'Refund Policy' }],
       published: PUBLISHED,
       updated: PUBLISHED,
       tldr: [
-        'Ask within 14 days of a charge and we refund it in full: no reason, no form, no questions about usage.',
-        'Covers your first payment, every renewal and minute top-ups. One email to info@openshorts.app is enough.',
-        'The only thing we do not refund is an account terminated for abuse.',
+        'Charged in the last 14 days and have not used the service since? We refund it in full, no reason needed.',
+        'It covers your most recent charge only, and it is built for the renewal you did not notice. One email to info@openshorts.app.',
+        'If you did spend minutes, the EU withdrawal right in section 12 of the Terms may still refund the part you did not use.',
       ],
       body: REFUNDS_EN,
     },
@@ -1351,16 +1383,16 @@ export function legalPages() {
       path: '/reembolsos',
       title: 'Política de Reembolsos | OpenShorts',
       description:
-        'Pídelo dentro de los 14 días siguientes a cualquier cargo y OpenShorts te lo devuelve entero, sin justificación. Cómo pedirlo, cuándo llega y cómo se suma al derecho de desistimiento.',
+        '¿Te han cobrado en los últimos 14 días y no has usado el servicio? OpenShorts te lo devuelve entero. Qué cuenta como usarlo, cómo pedirlo y qué cubre el desistimiento.',
       h1: 'Política de Reembolsos',
       breadcrumb: [{ name: 'Política de Reembolsos' }],
       published: PUBLISHED,
       updated: PUBLISHED,
       lang: 'es',
       tldr: [
-        'Pídelo dentro de los 14 días siguientes a un cargo y te lo devolvemos entero: sin justificación, sin formularios y sin mirar cuánto has usado.',
-        'Cubre el primer pago, cada renovación y las recargas de minutos. Basta un email a info@openshorts.app.',
-        'Lo único que no se reembolsa es una cuenta cancelada por abuso.',
+        '¿Te hemos cobrado en los últimos 14 días y no has usado el servicio desde entonces? Te lo devolvemos entero, sin justificación.',
+        'Cubre solo tu último cargo, y está pensada para la renovación que no te sonó. Basta un email a info@openshorts.app.',
+        'Si sí gastaste minutos, el desistimiento del apartado 12 de los Términos puede devolverte la parte no consumida.',
       ],
       body: REFUNDS_ES,
     },
