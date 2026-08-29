@@ -772,9 +772,24 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
                     }}
                 />
                 <div className="absolute top-3 left-3 flex gap-2">
+                    {/* Stays the clip's own number, not its rank: the cards are
+                        ordered by score, but this is what the downloaded file
+                        is called (clip-N.mp4) and what every api call indexes. */}
                     <span className="bg-black/70 text-ink font-mono text-micro uppercase px-2 py-1 rounded-full">
                         Clip {index + 1}
                     </span>
+                    {Number.isFinite(clip.predicted_score) && (
+                        <span
+                            className={`bg-black/70 font-mono text-micro uppercase px-2 py-1 rounded-full ${
+                                clip.predicted_score >= 80 ? 'text-ok'
+                                    : clip.predicted_score >= 65 ? 'text-brass'
+                                        : 'text-muted'
+                            }`}
+                            title="how viral the ai predicts this clip is, 0-100"
+                        >
+                            {clip.predicted_score}
+                        </span>
+                    )}
                 </div>
 
                 {/* Auto Edit Overlay if Processing */}

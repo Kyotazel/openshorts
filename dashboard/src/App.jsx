@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { Upload, Sparkles, Youtube, Instagram, Share2, ChevronDown, Check, Activity, LayoutDashboard, Settings, Plus, History, X, Terminal, Shield, LayoutGrid, Image, Globe, RotateCcw, Calendar, AlertTriangle, KeyRound, Bot, Users, Smartphone, ExternalLink, Copy, CheckCircle2, Mail, Loader2, Download, Menu } from 'lucide-react';
 import KeyInput from './components/KeyInput';
 import MediaInput from './components/MediaInput';
@@ -242,6 +242,27 @@ function App() {
   const [jobId, setJobId] = useState(null);
   const [status, setStatus] = useState('idle'); // idle, processing, complete, error
   const [results, setResults] = useState(null);
+  // Best clips first. The backend hands them back in transcript order, which
+  // buries the strongest one wherever it happens to fall in the video — and
+  // the first card is the one people actually watch and publish.
+  //
+  // The ORIGINAL array position travels with each clip and is what gets passed
+  // down as `index`: it is the clip's identity everywhere else (clip_index on
+  // /api/subtitle, /api/edit and publishing, the clip-N.mp4 download name, the
+  // saved per-clip project state). Sorting the array itself would silently
+  // repoint all of that at the wrong clip.
+  const rankedClips = useMemo(() => {
+    const clips = results?.clips;
+    if (!Array.isArray(clips)) return [];
+    return clips
+      .map((clip, index) => ({ clip, index }))
+      .sort((a, b) => {
+        const sa = Number.isFinite(a.clip?.predicted_score) ? a.clip.predicted_score : -1;
+        const sb = Number.isFinite(b.clip?.predicted_score) ? b.clip.predicted_score : -1;
+        // Ties (and clips with no score at all) keep transcript order.
+        return sb - sa || a.index - b.index;
+      });
+  }, [results]);
   // Bulk subtitles: apply one style to every clip of the job (triggered from
   // within a clip's subtitle modal via "apply to all").
   const [bulkSub, setBulkSub] = useState({ running: false, current: 0, total: 0, errors: 0 });
@@ -1845,7 +1866,7 @@ function App() {
                 <div className="flex-1 overflow-y-auto custom-scrollbar p-1">
                   {results && results.clips && results.clips.length > 0 ? (
                     <div className={`grid gap-4 pb-10 ${status === 'complete' ? 'grid-cols-1 xl:grid-cols-2' : 'grid-cols-1'}`}>
-                      {results.clips.map((clip, i) => (
+                      {rankedClips.map(({ clip, index: i }) => (
                         <ResultCard
                           key={`${jobId}-${i}-${clip.video_url || ''}`}
                           clip={clip}
