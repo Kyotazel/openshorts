@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Download, Share2, Instagram, Youtube, Video, AlertCircle, Loader2, Copy, Check, Wand2, Type, Calendar, Languages, FileText, Link2, Scissors, Crosshair } from 'lucide-react';
+import { Download, Share2, Instagram, Youtube, Video, AlertCircle, Loader2, Copy, Check, Wand2, Type, Calendar, Languages, FileText, Link2, Scissors, Crosshair, TrendingUp } from 'lucide-react';
 import { getApiUrl } from '../config';
 import { apiFetch } from '../lib/api';
 import SubtitleModal from './SubtitleModal';
@@ -778,16 +778,24 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
                     <span className="bg-black/70 text-ink font-mono text-micro uppercase px-2 py-1 rounded-full">
                         Clip {index + 1}
                     </span>
+                    {/* A bare number on a thumbnail reads as a duration, a
+                        position, anything — it has to name itself and carry
+                        its scale, or it is decoration. */}
                     {Number.isFinite(clip.predicted_score) && (
                         <span
-                            className={`bg-black/70 font-mono text-micro uppercase px-2 py-1 rounded-full ${
+                            className="bg-black/70 font-mono text-micro uppercase px-2 py-1 rounded-full flex items-center gap-1"
+                            title="openshorts' prediction of how well this clip will perform, from 0 to 100"
+                        >
+                            <TrendingUp size={11} className="shrink-0 text-muted" />
+                            <span className="text-muted">viral</span>
+                            <b className={
                                 clip.predicted_score >= 80 ? 'text-ok'
                                     : clip.predicted_score >= 65 ? 'text-brass'
-                                        : 'text-muted'
-                            }`}
-                            title="how viral the ai predicts this clip is, 0-100"
-                        >
-                            {clip.predicted_score}
+                                        : 'text-ink2'
+                            }>
+                                {clip.predicted_score}
+                            </b>
+                            <span className="text-muted">/100</span>
                         </span>
                     )}
                 </div>
