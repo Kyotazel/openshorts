@@ -4254,6 +4254,13 @@ async def translate_clip(
         print(f"❌ Translation Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+    # AI Act art. 50(2): the voice in this file was synthesised, so the file
+    # says so in a way a machine can read. Best-effort by design — see
+    # ffmpeg_utils.mark_ai_generated.
+    from ffmpeg_utils import mark_ai_generated
+    await loop.run_in_executor(
+        None, lambda: mark_ai_generated(output_path, "AI voice dubbing"))
+
     # Update InMemory Jobs
     if req.clip_index < len(job['result']['clips']):
          job['result']['clips'][req.clip_index]['video_url'] = f"/videos/{req.job_id}/{output_filename}"
