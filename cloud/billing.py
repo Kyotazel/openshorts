@@ -131,6 +131,20 @@ async def list_plans():
     return {"plans": cat["plans"], "topups": cat["topups"]}
 
 
+# Shown next to Stripe's terms checkbox. Two jobs in one tick: it makes the
+# terms opposable to someone who signed up with a magic link and never opened
+# them, and it is the express request for immediate performance that art. 16(m)
+# of the consumer-rights directive wants before we start spending minutes
+# inside the 14-day withdrawal window. Without it a withdrawal on day 13 is
+# a full refund of a plan that was already used.
+CONSENT_MESSAGE = (
+    "I accept the Terms of Service and the Privacy Policy, and I ask OpenShorts "
+    "to start the service immediately. EU consumers: you keep your 14-day right "
+    "of withdrawal, but you accept that we may charge for the minutes already "
+    "processed when you withdraw."
+)
+
+
 class CheckoutRequest(BaseModel):
     price_id: str
 
@@ -177,7 +191,30 @@ async def create_checkout(body: CheckoutRequest, request: Request):
     # kept as the documented grandfathering mechanism.
     if mode == "subscription" and TRIAL_DAYS > 0:
         kwargs["subscription_data"] = {"trial_period_days": TRIAL_DAYS}
-    session = await asyncio.to_thread(lambda: stripe.checkout.Session.create(**kwargs))
+    consent = dict(
+        consent_collection={"terms_of_service": "required"},
+        custom_text={"terms_of_service_acceptance": {"message": CONSENT_MESSAGE}},
+    )
+    try:
+        session = await asyncio.to_thread(
+            lambda: stripe.checkout.Session.create(**kwargs, **consent))
+    except Exception as exc:
+        # The checkbox needs a Terms of service URL under Stripe > Settings >
+        # Checkout; without it Stripe rejects the whole session. Losing the
+        # consent record is bad, refusing the sale is worse, so fall back and
+        # let it switch itself on the moment the URL is configured.
+        #
+        # Caught by message rather than by exception class on purpose: which
+        # subclass Stripe raises is not worth betting the checkout button on.
+        # Anything that is not about the terms URL re-raises untouched.
+        # Match both prose and the parameter name: Stripe has phrased this as
+        # "terms of service" and as `terms_of_service_url` depending on where
+        # it fails, and a miss here means a 500 on the checkout button.
+        msg = str(exc).lower()
+        if "terms of service" not in msg and "terms_of_service" not in msg:
+            raise
+        print(f"[billing] checkout consent box disabled: {exc}", flush=True)
+        session = await asyncio.to_thread(lambda: stripe.checkout.Session.create(**kwargs))
     return {"url": session.url}
 
 
