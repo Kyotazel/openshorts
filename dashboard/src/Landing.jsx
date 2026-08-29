@@ -797,6 +797,8 @@ export default function Landing({ onLaunchApp }) {
               <a href="/terms" className="hover:text-ink transition-colors whitespace-nowrap">Terms</a>
               <a href="/privacy" className="hover:text-ink transition-colors whitespace-nowrap">Privacy</a>
               <a href="/legal-notice" className="hover:text-ink transition-colors whitespace-nowrap">Legal Notice</a>
+              <a href="/refunds" className="hover:text-ink transition-colors whitespace-nowrap">Refunds</a>
+              <a href="/report-content" className="hover:text-ink transition-colors whitespace-nowrap">Report Content</a>
             </div>
           </div>
         </div>

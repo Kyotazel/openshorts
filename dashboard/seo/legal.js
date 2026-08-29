@@ -15,10 +15,14 @@
  * (SaaS is a digital service, not digital content — the right survives but is
  * paid pro-rata); the 15-day renewal reminder follows Ley 10/2025; the
  * moderation/takedown sections implement DSA arts. 11-17 for a hosting
- * service; AI labelling follows AI Act art. 50.
+ * service; AI labelling follows AI Act art. 50. The DMCA block inside section
+ * 9 is not a duplicate of the DSA one: the DSA notice-and-action mechanism
+ * does not grant the US safe harbor, and 17 U.S.C. 512(c) needs a designated
+ * agent both published here AND registered with the US Copyright Office —
+ * publishing this text is only half of it.
  */
 
-const PUBLISHED = '2026-08-24'
+const PUBLISHED = '2026-08-29'
 
 const TERMS_EN = `
 <h2>1. Who we are</h2>
@@ -153,6 +157,8 @@ throttled, suspended or terminated, with reasons given to the affected user. We
 may block re-registration by the same person after a termination for abuse.</p>
 
 <h2>9. Copyright complaints and content takedown</h2>
+<p>The full procedure, with what a notice needs and how to challenge a removal,
+is on its own page: <a href="/report-content">Report Illegal Content</a>.</p>
 <p>If you believe content processed or hosted through the service infringes
 your rights, email info@openshorts.app (our point of contact for users and
 authorities under Articles 11 and 12 DSA) with: your name and contact details,
@@ -163,6 +169,37 @@ substantiated, and inform the affected user with reasons; the affected user may
 reply with a substantiated counter-notice. We terminate the accounts of repeat
 infringers. This procedure implements the notice-and-action mechanism of
 Article 16 DSA.</p>
+<h3>Notices under the US DMCA</h3>
+<p>For rightsholders in the United States, TONVI TECH SL has designated the
+following agent to receive notifications of claimed infringement under 17
+U.S.C. § 512(c)(2):</p>
+<p>Copyright Agent, TONVI TECH SL, Calle Puerta del Mar 18, 5th floor, 29005
+Málaga, Spain. Email: info@upload-post.com.</p>
+<p>That address is the one on file with the US Copyright Office for this
+company, which operates openshorts.app and upload-post.com. Notices sent to
+info@openshorts.app are acted upon too, but the address above is the formal
+channel.</p>
+<p>A notification must be in writing and include: a physical or electronic
+signature of the owner or of a person authorised to act for them; identification
+of the copyrighted work claimed to be infringed; identification of the material
+you say is infringing and where it can be found on the service; your address,
+telephone number and email; a statement that you have a good-faith belief that
+the use is not authorised by the owner, its agent or the law; and a statement,
+made under penalty of perjury, that the information in the notice is accurate
+and that you are the owner or authorised to act on the owner's behalf.</p>
+<p>If your material was removed and you believe the removal was a mistake or a
+misidentification, you may send a counter-notification to the same agent under
+17 U.S.C. § 512(g), including your signature, identification of the material
+and where it appeared, a statement under penalty of perjury that you believe in
+good faith it was removed by mistake or misidentification, and your consent to
+the jurisdiction of the US federal district court for the district where you
+live, or, if you live outside the United States, of any district in which we
+may be found. We forward the counter-notification to the complainant and may
+restore the material after 10 business days unless they tell us they have filed
+a court action seeking to restrain you.</p>
+<p>Under 17 U.S.C. § 512(f), anyone who knowingly and materially misrepresents
+that material is infringing, or that it was removed by mistake, is liable for
+the damages that misrepresentation causes.</p>
 
 <h2>10. Publishing to your social accounts</h2>
 <p>If you connect social accounts (via our publishing partner, Upload-Post),
@@ -196,6 +233,10 @@ Automatic renewals of an ongoing subscription do not open a new withdrawal
 period. To withdraw, email info@openshorts.app or use the model form we include
 in your confirmation email; refunds are issued to the original payment method
 within 14 days.</p>
+<p>In practice our <a href="/refunds">refund policy</a> is more generous than
+this and is what you will actually get: within 14 days of any charge we refund
+it in full, without deducting the part of the service you already used. This
+section describes the legal floor, not the ceiling.</p>
 
 <h2>13. Content retention and deletion</h2>
 <p>Generated clips on the free plan are stored for 7 days and then permanently
@@ -389,6 +430,9 @@ Podemos bloquear el re-registro de la misma persona tras una cancelación por
 abuso.</p>
 
 <h2>9. Reclamaciones de derechos de autor y retirada de contenido</h2>
+<p>El procedimiento completo, con lo que debe contener una notificación y cómo
+impugnar una retirada, está en su propia página:
+<a href="/reportar-contenido">Reportar Contenido Ilícito</a>.</p>
 <p>Si crees que contenido procesado o alojado a través del servicio infringe
 tus derechos, escribe a info@openshorts.app (nuestro punto de contacto para
 usuarios y autoridades según los artículos 11 y 12 de la DSA) indicando: tu
@@ -400,6 +444,37 @@ motivadamente al usuario afectado, que podrá responder con una contra-
 notificación fundada. Cancelamos las cuentas de los infractores reincidentes.
 Este procedimiento aplica el mecanismo de notificación y acción del artículo 16
 de la DSA.</p>
+<h3>Notificaciones bajo la DMCA estadounidense</h3>
+<p>Para titulares de derechos en Estados Unidos, TONVI TECH SL ha designado al
+siguiente agente para recibir notificaciones de presunta infracción conforme al
+17 U.S.C. § 512(c)(2):</p>
+<p>Copyright Agent, TONVI TECH SL, Calle Puerta del Mar 18, 5ª planta, 29005
+Málaga, España. Email: info@upload-post.com.</p>
+<p>Esa es la dirección que consta en el Copyright Office estadounidense para
+esta empresa, que opera openshorts.app y upload-post.com. Las notificaciones
+enviadas a info@openshorts.app también se atienden, pero el canal formal es la
+dirección anterior.</p>
+<p>La notificación debe hacerse por escrito e incluir: la firma física o
+electrónica del titular o de quien esté autorizado a actuar en su nombre; la
+identificación de la obra protegida presuntamente infringida; la identificación
+del material que consideras infractor y dónde se encuentra en el servicio; tu
+dirección, teléfono y email; una declaración de que crees de buena fe que el
+uso no está autorizado por el titular, su agente o la ley; y una declaración,
+bajo pena de perjurio, de que la información es exacta y de que eres el titular
+o estás autorizado a actuar en su nombre.</p>
+<p>Si retiramos tu material y crees que fue un error o una identificación
+equivocada, puedes enviar una contra-notificación al mismo agente conforme al
+17 U.S.C. § 512(g), con tu firma, la identificación del material y del lugar
+donde aparecía, una declaración bajo pena de perjurio de que crees de buena fe
+que se retiró por error, y tu sometimiento a la jurisdicción del tribunal
+federal de distrito de tu domicilio o, si resides fuera de Estados Unidos, de
+cualquier distrito en el que podamos ser emplazados. Trasladamos la
+contra-notificación al reclamante y podemos restaurar el material pasados 10
+días hábiles, salvo que nos comunique que ha iniciado acciones judiciales para
+impedírtelo.</p>
+<p>Conforme al 17 U.S.C. § 512(f), quien manifieste a sabiendas y de forma
+sustancialmente falsa que un material infringe derechos, o que se retiró por
+error, responde de los daños que esa manifestación cause.</p>
 
 <h2>10. Publicación en tus cuentas sociales</h2>
 <p>Si conectas cuentas sociales (a través de nuestro socio de publicación,
@@ -435,6 +510,11 @@ el derecho se pierde una vez el servicio se ha ejecutado por completo
 un nuevo plazo de desistimiento. Para desistir, escribe a info@openshorts.app o
 usa el formulario modelo que incluimos en tu email de confirmación; los
 reembolsos se emiten al medio de pago original en un máximo de 14 días.</p>
+<p>En la práctica nuestra <a href="/reembolsos">política de reembolsos</a> es
+más generosa que esto y es la que se te va a aplicar: dentro de los 14 días
+siguientes a cualquier cargo lo devolvemos entero, sin descontar la parte del
+servicio que ya hayas consumido. Este apartado describe el suelo legal, no el
+techo.</p>
 
 <h2>13. Conservación y eliminación del contenido</h2>
 <p>Los clips generados en el plan gratuito se conservan 7 días y después se
@@ -619,11 +699,43 @@ If you believe we are mishandling your data, you can complain to the Spanish
 supervisory authority (AEPD, aepd.es) or to the authority of your own EU
 country.</p>
 
-<h2>7. Age</h2>
+<h2>7. California residents (CCPA/CPRA)</h2>
+<p>If you live in California, this section is your notice at collection. In the
+last twelve months we have collected these categories of personal information:
+identifiers (the email address you sign in with); commercial information (your
+plan, your minute balance and the Stripe reference for your payments, never
+your card number); internet activity (first-party, self-hosted analytics about
+how the app is used); and audio and visual information (the videos you upload
+or link, their audio, the clips we produce and their transcripts). We collect
+them to run the service you asked for, to bill it, to keep it secure and to
+meet our legal obligations, as detailed in section 2. The sources are you and,
+where you paste a link, the platform you took the video from.</p>
+<p><strong>We do not sell your personal information, and we do not share it for
+cross-context behavioural advertising.</strong> We have not done so in the
+preceding twelve months, and we do not do it with the data of anyone under 16.
+We disclose data to service providers only, for the purposes and to the
+recipients listed in section 4, under contracts that stop them using it for
+anything else.</p>
+<p>Our reframing detects faces and subjects inside the picture so it knows where
+to crop. That happens on our own servers, is never used to recognise or
+identify anyone, and produces no faceprint or other identifier that could match
+a person across videos. We do not use sensitive personal information to infer
+characteristics about you, so the right to limit its use does not arise.</p>
+<p>You have the right to know what we collect and to receive a copy of it, to
+have it corrected, to have it deleted, and not to be discriminated against for
+exercising any of these rights: we do not offer a worse service, a higher price
+or fewer features to anyone who does. Exercise them by emailing
+info@openshorts.app from your account address, or delete everything yourself
+with <strong>Account → Delete account</strong>. We verify a request by the
+control you have over the account email, which is the same credential you sign
+in with, and we answer within 45 days. An authorised agent may act for you if
+they provide your written permission.</p>
+
+<h2>8. Age</h2>
 <p>The service is not directed at children. You must be at least 16, or the
 age of digital consent in your country if higher, to create an account.</p>
 
-<h2>8. Changes</h2>
+<h2>9. Changes</h2>
 <p>If we change this policy in any meaningful way we will tell you by email or
 in-app before the change takes effect, and the date on this page always
 reflects the current version.</p>
@@ -757,11 +869,44 @@ dirección en sí. Si crees que tratamos mal tus datos, puedes reclamar
 ante la Agencia Española de Protección de Datos (AEPD, aepd.es) o ante la
 autoridad de tu país de la UE.</p>
 
-<h2>7. Edad</h2>
+<h2>7. Residentes en California (CCPA/CPRA)</h2>
+<p>Si resides en California, este apartado es tu aviso en el momento de la
+recogida. En los últimos doce meses hemos recogido estas categorías de
+información personal: identificadores (la dirección de email con la que
+accedes); información comercial (tu plan, tu saldo de minutos y la referencia
+de Stripe de tus pagos, nunca el número de tu tarjeta); actividad en internet
+(analítica propia y autoalojada sobre el uso de la aplicación); e información
+audiovisual (los vídeos que subes o enlazas, su audio, los clips que
+generamos y sus transcripciones). Las recogemos para prestarte el servicio que
+has pedido, facturarlo, mantenerlo seguro y cumplir nuestras obligaciones
+legales, según el detalle del apartado 2. Las fuentes eres tú y, cuando pegas
+un enlace, la plataforma de la que tomas el vídeo.</p>
+<p><strong>No vendemos tu información personal ni la compartimos para
+publicidad conductual entre contextos.</strong> No lo hemos hecho en los doce
+meses anteriores y no lo hacemos con datos de menores de 16 años. Solo la
+comunicamos a proveedores de servicios, para los fines y a los destinatarios
+del apartado 4, con contratos que les impiden usarla para otra cosa.</p>
+<p>Nuestro reencuadre detecta caras y sujetos dentro de la imagen para saber
+por dónde recortar. Ocurre en nuestros propios servidores, nunca se usa para
+reconocer ni identificar a nadie, y no genera una plantilla facial ni ningún
+identificador que permita relacionar a una persona entre vídeos. No usamos
+información personal sensible para inferir características sobre ti, así que
+el derecho a limitar su uso no llega a nacer.</p>
+<p>Tienes derecho a saber qué recogemos y a recibir una copia, a que se
+rectifique, a que se elimine y a no sufrir discriminación por ejercer
+cualquiera de estos derechos: no damos peor servicio, ni precio más alto, ni
+menos funciones a quien los ejerce. Se ejercen escribiendo a
+info@openshorts.app desde la dirección de tu cuenta, o eliminándolo todo tú
+mismo desde <strong>Cuenta → Eliminar cuenta</strong>. Verificamos la solicitud
+por el control que tienes sobre el email de la cuenta, que es la misma
+credencial con la que accedes, y respondemos en 45 días. Un agente autorizado
+puede actuar por ti si aporta tu permiso por escrito.</p>
+
+<h2>8. Edad</h2>
 <p>El servicio no está dirigido a menores. Para crear una cuenta debes tener al
 menos 16 años, o la edad de consentimiento digital de tu país si es mayor.</p>
 
-<h2>8. Cambios</h2>
+<h2>9. Cambios</h2>
 <p>Si cambiamos esta política de forma relevante te lo comunicaremos por email
 o en la aplicación antes de que el cambio surta efecto, y la fecha de esta
 página refleja siempre la versión vigente.</p>
@@ -849,6 +994,211 @@ y autoridades; el procedimiento se describe en la cláusula 9 de los
 <p>Este aviso legal se rige por la ley española. Está también disponible en
 <a href="/legal-notice">inglés</a>; para residentes en España prevalece la
 versión en castellano.</p>
+`
+
+const REPORT_EN = `
+<h2>What this page is for</h2>
+<p>This is the notice-and-action mechanism of Article 16 of Regulation (EU)
+2022/2065 (the Digital Services Act). Use it to tell us that content processed,
+stored or transmitted through openshorts.app is illegal, including content that
+infringes copyright, trademarks, image rights or privacy. You do not need an
+account and you do not need a lawyer.</p>
+<p>If your complaint is about your own account, your billing or your data, this
+is the wrong page: write to info@openshorts.app and say what you need.</p>
+
+<h2>How to send a notice</h2>
+<p>Email <strong>info@openshorts.app</strong> with the subject line
+<strong>Illegal content report</strong>, in English or Spanish. So that we can
+act on it without having to come back to you, the notice needs:</p>
+<ul>
+<li>the exact URL or identifier of the material, precise enough for us to find
+it without searching;</li>
+<li>an explanation of why you consider it illegal, and under which law;</li>
+<li>your name and email address, unless the report concerns child sexual abuse
+material or offences against sexual freedom, which may be sent anonymously;</li>
+<li>a statement that you believe in good faith that the information in the
+notice is accurate and complete.</li>
+</ul>
+<p>If you are the rightsholder or act for them, say which of the two you are.
+A notice that contains all of the above gives us actual knowledge of the
+content, which is what triggers our obligation to act.</p>
+
+<h2>What happens next</h2>
+<p>We confirm receipt of your notice without undue delay. We then review it
+diligently, without arbitrary decisions, and with human judgement rather than
+an automated rule. When the notice is substantiated we remove or disable access
+to the material, and we tell you what we decided and why. If we decide not to
+act, we tell you that too, and why.</p>
+<p>Notices that are manifestly unfounded, or that come from someone who sends
+them repeatedly in bad faith, get their processing suspended after we warn the
+sender. Accounts that repeatedly upload infringing material are terminated.</p>
+
+<h2>If your content was removed</h2>
+<p>When we remove your content, restrict it, or suspend your account on these
+grounds, you get a statement of reasons under Article 17 DSA: what we removed,
+the facts we relied on, the legal or contractual ground, whether an automated
+system was involved, and how to challenge the decision.</p>
+<p>To challenge it, reply to that message or write to info@openshorts.app. A
+person reviews it, not a filter. You also keep two routes that do not depend on
+us at all: an out-of-court dispute settlement body certified under Article 21
+DSA, and the courts. Nothing on this page limits either.</p>
+
+<h2>Copyright notices from the United States</h2>
+<p>The procedure above covers copyright complaints wherever you are. If you
+prefer to send a formal notification under the US Digital Millennium Copyright
+Act, section 9 of our <a href="/terms">Terms of Service</a> names our designated
+agent and lists what section 512(c)(3) requires the notification to contain.</p>
+
+<h2>Point of contact</h2>
+<p>info@openshorts.app is our single point of contact for users (Article 12
+DSA) and for Member State authorities, the Commission and the European Board
+for Digital Services (Article 11 DSA). We accept communications in Spanish and
+in English. The service is operated by TONVI TECH SL, CIF B-19780394, Calle
+Puerta del Mar 18, 5th floor, 29005 Málaga, Spain.</p>
+`
+
+const REPORT_ES = `
+<h2>Para qué sirve esta página</h2>
+<p>Este es el mecanismo de notificación y acción del artículo 16 del Reglamento
+(UE) 2022/2065 (Reglamento de Servicios Digitales, DSA). Úsalo para avisarnos
+de que un contenido procesado, almacenado o transmitido a través de
+openshorts.app es ilícito, incluidos los que infringen derechos de autor,
+marcas, derechos de imagen o privacidad. No necesitas tener cuenta ni abogado.</p>
+<p>Si tu problema es con tu cuenta, tu facturación o tus datos, esta no es la
+página: escribe a info@openshorts.app y cuéntanos qué necesitas.</p>
+
+<h2>Cómo enviar una notificación</h2>
+<p>Escribe a <strong>info@openshorts.app</strong> con el asunto
+<strong>Reporte de contenido ilícito</strong>, en español o en inglés. Para que
+podamos actuar sin tener que volver a preguntarte, la notificación necesita:</p>
+<ul>
+<li>la URL o el identificador exacto del material, con precisión suficiente
+para localizarlo sin buscar;</li>
+<li>una explicación de por qué lo consideras ilícito, y conforme a qué norma;</li>
+<li>tu nombre y tu email, salvo que el reporte trate de material de abuso
+sexual infantil o de delitos contra la libertad sexual, que puede enviarse de
+forma anónima;</li>
+<li>una declaración de que crees de buena fe que la información de la
+notificación es exacta y completa.</li>
+</ul>
+<p>Si eres el titular de los derechos o actúas en su nombre, dinos cuál de las
+dos cosas. Una notificación que incluya todo lo anterior nos da conocimiento
+efectivo del contenido, que es lo que activa nuestra obligación de actuar.</p>
+
+<h2>Qué pasa después</h2>
+<p>Confirmamos la recepción de tu notificación sin dilaciones indebidas.
+Después la revisamos de forma diligente y no arbitraria, con criterio humano y
+no con una regla automática. Cuando la notificación está fundada, retiramos o
+bloqueamos el acceso al material y te comunicamos qué hemos decidido y por qué.
+Si decidimos no actuar, también te lo decimos, y por qué.</p>
+<p>Las notificaciones manifiestamente infundadas, o las de quien las envía de
+forma reiterada y de mala fe, ven suspendida su tramitación previa advertencia
+al remitente. Las cuentas que suben material infractor de forma reiterada se
+cancelan.</p>
+
+<h2>Si te hemos retirado contenido</h2>
+<p>Cuando retiramos tu contenido, lo restringimos o suspendemos tu cuenta por
+estos motivos, recibes una declaración de motivos conforme al artículo 17 de la
+DSA: qué hemos retirado, los hechos en que nos basamos, el fundamento legal o
+contractual, si ha intervenido un sistema automatizado y cómo impugnar la
+decisión.</p>
+<p>Para impugnarla, responde a ese mensaje o escribe a info@openshorts.app. Lo
+revisa una persona, no un filtro. Además conservas dos vías que no dependen de
+nosotros: un órgano de resolución extrajudicial de litigios certificado
+conforme al artículo 21 de la DSA, y los tribunales. Nada de esta página limita
+ninguna de las dos.</p>
+
+<h2>Notificaciones de copyright desde Estados Unidos</h2>
+<p>El procedimiento anterior cubre las reclamaciones de derechos de autor estés
+donde estés. Si prefieres enviar una notificación formal conforme a la Digital
+Millennium Copyright Act estadounidense, el apartado 9 de nuestros
+<a href="/terminos">Términos de Servicio</a> identifica a nuestro agente
+designado y detalla lo que la sección 512(c)(3) exige que contenga.</p>
+
+<h2>Punto de contacto</h2>
+<p>info@openshorts.app es nuestro punto único de contacto para los usuarios
+(artículo 12 de la DSA) y para las autoridades de los Estados miembros, la
+Comisión y la Junta Europea de Servicios Digitales (artículo 11 de la DSA).
+Aceptamos comunicaciones en español y en inglés. El servicio lo opera TONVI
+TECH SL, CIF B-19780394, Calle Puerta del Mar 18, 5ª planta, 29005 Málaga,
+España.</p>
+`
+
+const REFUNDS_EN = `
+<h2>The short version</h2>
+<p>Ask within <strong>14 days of a charge</strong> and we refund it in full. No
+reason needed, no form to fill in, no questions about how much of the service
+you used. One email is enough.</p>
+<p>This covers every charge: your first subscription payment, each renewal, and
+minute top-ups.</p>
+
+<h2>How to ask</h2>
+<p>Email <strong>info@openshorts.app</strong> from the address your account
+uses and say you want a refund. If you have the invoice number, include it; if
+you do not, we will find the charge. We reply the same working day.</p>
+
+<h2>When you get the money</h2>
+<p>We issue the refund to the original payment method within 14 days of your
+request, and normally the same day. Your bank or card issuer then takes its own
+time to show it, usually 5 to 10 working days. That last stretch is outside our
+control.</p>
+<p>Refunding a subscription payment also cancels the subscription, so you are
+not charged again. If you only want to stop future payments and keep using what
+you already paid for, cancel from <strong>Account</strong> instead: your plan
+runs to the end of the period you paid.</p>
+
+<h2>The one exception</h2>
+<p>We do not refund an account terminated for abuse: uploading illegal content,
+repeat copyright infringement, or trying to defraud the service. Everything
+else is refundable within the 14 days, including "I changed my mind" and "I
+processed all my videos and it was not what I hoped for".</p>
+
+<h2>This sits on top of your legal rights</h2>
+<p>If you are a consumer in the EU you also have the statutory right of
+withdrawal described in section 12 of our <a href="/terms">Terms of
+Service</a>. That right entitles you to a refund of the part of the service you
+have not used. This policy is more generous, because it refunds the whole
+charge, so in practice it is the one that applies. Nothing here reduces any
+right the law gives you.</p>
+`
+
+const REFUNDS_ES = `
+<h2>La versión corta</h2>
+<p>Pídelo dentro de los <strong>14 días siguientes a un cargo</strong> y te lo
+devolvemos entero. Sin justificación, sin formularios y sin preguntarte cuánto
+has usado el servicio. Basta con un email.</p>
+<p>Cubre todos los cargos: el primer pago de la suscripción, cada renovación y
+las recargas de minutos.</p>
+
+<h2>Cómo pedirlo</h2>
+<p>Escribe a <strong>info@openshorts.app</strong> desde la dirección de tu
+cuenta y dinos que quieres el reembolso. Si tienes el número de factura,
+inclúyelo; si no, ya localizamos nosotros el cargo. Respondemos el mismo día
+laborable.</p>
+
+<h2>Cuándo llega el dinero</h2>
+<p>Emitimos el reembolso al medio de pago original en un máximo de 14 días
+desde tu solicitud, y normalmente el mismo día. Después, tu banco o tu emisora
+de tarjeta se toma su tiempo en reflejarlo, entre 5 y 10 días hábiles. Ese
+último tramo no está en nuestra mano.</p>
+<p>Reembolsar un pago de suscripción la cancela también, así que no se te vuelve
+a cobrar. Si lo que quieres es solo dejar de pagar y seguir usando lo que ya
+pagaste, cancela desde <strong>Cuenta</strong>: tu plan sigue hasta el final del
+periodo abonado.</p>
+
+<h2>La única excepción</h2>
+<p>No reembolsamos una cuenta cancelada por abuso: subir contenido ilícito,
+infringir derechos de autor de forma reiterada o intentar defraudar al
+servicio. Todo lo demás entra dentro de los 14 días, incluido "he cambiado de
+idea" y "he procesado todos mis vídeos y no era lo que esperaba".</p>
+
+<h2>Esto se suma a tus derechos legales</h2>
+<p>Si eres consumidor en la UE tienes además el derecho de desistimiento que
+describe el apartado 12 de nuestros <a href="/terminos">Términos de
+Servicio</a>, que te permite recuperar la parte del servicio que no has
+consumido. Esta política es más generosa, porque devuelve el cargo completo, así
+que en la práctica es la que se aplica. Nada de aquí recorta ningún derecho que
+te dé la ley.</p>
 `
 
 export function legalPages() {
@@ -947,6 +1297,72 @@ export function legalPages() {
         'openshorts.app es un servicio de TONVI TECH SL, CIF B-19780394, Calle Puerta del Mar 18, 29005 Málaga, España — contacto info@openshorts.app.',
       ],
       body: LEGAL_ES,
+    },
+    {
+      path: '/report-content',
+      title: 'Report Illegal Content | OpenShorts',
+      description:
+        'How to report illegal or infringing content on openshorts.app: what a notice must contain, what we do with it, and how to challenge a removal. Article 16 DSA.',
+      h1: 'Report Illegal Content',
+      breadcrumb: [{ name: 'Report Illegal Content' }],
+      published: PUBLISHED,
+      updated: PUBLISHED,
+      tldr: [
+        'Email info@openshorts.app with the subject "Illegal content report", the exact URL, why it is illegal, and your contact details.',
+        'We confirm receipt without undue delay, review it with human judgement, and tell you what we decided and why.',
+        'If we removed your content you get a statement of reasons and can challenge it, with the courts and an Article 21 dispute body always open to you.',
+      ],
+      body: REPORT_EN,
+    },
+    {
+      path: '/reportar-contenido',
+      title: 'Reportar Contenido Ilícito | OpenShorts',
+      description:
+        'Cómo reportar contenido ilícito o infractor en openshorts.app: qué debe contener la notificación, qué hacemos con ella y cómo impugnar una retirada. Artículo 16 DSA.',
+      h1: 'Reportar Contenido Ilícito',
+      breadcrumb: [{ name: 'Reportar Contenido Ilícito' }],
+      published: PUBLISHED,
+      updated: PUBLISHED,
+      lang: 'es',
+      tldr: [
+        'Escribe a info@openshorts.app con el asunto "Reporte de contenido ilícito", la URL exacta, por qué es ilícito y tus datos de contacto.',
+        'Confirmamos la recepción sin dilaciones indebidas, lo revisa una persona y te comunicamos qué decidimos y por qué.',
+        'Si te hemos retirado contenido recibes una declaración de motivos y puedes impugnarla, con los tribunales y un órgano del artículo 21 siempre abiertos.',
+      ],
+      body: REPORT_ES,
+    },
+    {
+      path: '/refunds',
+      title: 'Refund Policy | OpenShorts',
+      description:
+        'Ask within 14 days of any charge and OpenShorts refunds it in full, no reason needed. How to ask, when the money lands, and how this sits on top of EU withdrawal rights.',
+      h1: 'Refund Policy',
+      breadcrumb: [{ name: 'Refund Policy' }],
+      published: PUBLISHED,
+      updated: PUBLISHED,
+      tldr: [
+        'Ask within 14 days of a charge and we refund it in full: no reason, no form, no questions about usage.',
+        'Covers your first payment, every renewal and minute top-ups. One email to info@openshorts.app is enough.',
+        'The only thing we do not refund is an account terminated for abuse.',
+      ],
+      body: REFUNDS_EN,
+    },
+    {
+      path: '/reembolsos',
+      title: 'Política de Reembolsos | OpenShorts',
+      description:
+        'Pídelo dentro de los 14 días siguientes a cualquier cargo y OpenShorts te lo devuelve entero, sin justificación. Cómo pedirlo, cuándo llega y cómo se suma al derecho de desistimiento.',
+      h1: 'Política de Reembolsos',
+      breadcrumb: [{ name: 'Política de Reembolsos' }],
+      published: PUBLISHED,
+      updated: PUBLISHED,
+      lang: 'es',
+      tldr: [
+        'Pídelo dentro de los 14 días siguientes a un cargo y te lo devolvemos entero: sin justificación, sin formularios y sin mirar cuánto has usado.',
+        'Cubre el primer pago, cada renovación y las recargas de minutos. Basta un email a info@openshorts.app.',
+        'Lo único que no se reembolsa es una cuenta cancelada por abuso.',
+      ],
+      body: REFUNDS_ES,
     },
   ]
 }
