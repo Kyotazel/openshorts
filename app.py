@@ -7,6 +7,8 @@ import threading
 import json
 import shutil
 import glob
+import hashlib
+import hmac
 import time
 import zipfile
 import math
@@ -96,6 +98,17 @@ BILLING_ENABLED = os.environ.get("BILLING_ENABLED", "").lower() in ("1", "true",
 # the tight default because clips are archived to R2 as soon as a job finishes.
 JOB_RETENTION_SECONDS = int(
     os.environ.get("JOB_RETENTION_SECONDS", "3600" if BILLING_ENABLED else "86400")
+)
+# The retained download of a URL job (--keep-original) is the one artifact that
+# is a full copy of someone else's video rather than something we made, so it
+# can be aged out ahead of the clips it produced. Defaults to the job clock,
+# i.e. no change: dropping it earlier costs the clip editor, whose rerender,
+# reframe, scenes and EDL endpoints all read that file and answer 409 once it
+# is gone. Lower it only if you would rather lose in-session re-edits than
+# keep the original around. Uploads are deliberately untouched: that file is
+# the user's own content, which they attested to owning.
+SOURCE_RETENTION_SECONDS = int(
+    os.environ.get("SOURCE_RETENTION_SECONDS", str(JOB_RETENTION_SECONDS))
 )
 # Force full pipeline logs to the client even under billing (local debugging).
 DEBUG_LOGS = os.environ.get("DEBUG_LOGS", "").lower() in ("1", "true", "yes")
@@ -986,6 +999,36 @@ def _enforce_output_size_cap():
         print(f"🧹 Size cap: purged {job_id} ({size / 1024**2:.0f} MB)")
 
 
+def _sweep_retained_sources(now=None):
+    """Delete retained downloads older than SOURCE_RETENTION_SECONDS.
+
+    Only the ``source_video`` a URL job kept in its own directory: an upload is
+    the user's own file and ages out with the job like everything else. Yields
+    the job ids it emptied. A no-op unless the knob is set below the job clock.
+    """
+    if SOURCE_RETENTION_SECONDS >= JOB_RETENTION_SECONDS:
+        return
+    now = time.time() if now is None else now
+    for job_id in os.listdir(OUTPUT_DIR):
+        if job_id == os.path.basename(THUMBNAILS_DIR):
+            continue
+        try:
+            metas = glob.glob(os.path.join(OUTPUT_DIR, job_id, "*_metadata.json"))
+            if not metas:
+                continue
+            with open(metas[0]) as f:
+                name = json.load(f).get('source_video')
+            if not name:
+                continue
+            src = os.path.join(OUTPUT_DIR, job_id, os.path.basename(name))
+            if (os.path.exists(src)
+                    and now - os.path.getmtime(src) > SOURCE_RETENTION_SECONDS):
+                os.remove(src)
+                yield job_id
+        except Exception:
+            continue
+
+
 async def cleanup_jobs():
     """Background task to remove old jobs and files."""
     import time
@@ -1009,6 +1052,9 @@ async def cleanup_jobs():
                         shutil.rmtree(job_path, ignore_errors=True)
                         if job_id in jobs:
                             del jobs[job_id]
+
+            for job_id in _sweep_retained_sources(now):
+                print(f"🧹 Dropped retained source for job {job_id}")
 
             # Hard disk cap. The time-based sweep above bounds the *age* of what
             # we keep, not its size: a burst of long videos can fill the volume
@@ -2465,15 +2511,80 @@ def _locate_source(job_id: str):
     return None
 
 
+# How long a signed source URL stays valid. Long enough to survive an editing
+# session and a page reload, short enough that a link leaked through a log, a
+# referer or a shared screenshot is dead by the time anyone tries it.
+SOURCE_URL_TTL_SECONDS = int(os.environ.get("SOURCE_URL_TTL_SECONDS", "21600"))
+
+
+def _source_signature(job_id: str, exp: int) -> str:
+    """HMAC tying a job id to an expiry, keyed on the app's JWT secret."""
+    secret = (_cloud_config.settings.jwt_secret if BILLING_ENABLED else "") or ""
+    msg = f"{job_id}:{exp}".encode()
+    return hmac.new(secret.encode(), msg, hashlib.sha256).hexdigest()[:32]
+
+
+def _job_record(job_id: str):
+    """The in-memory job record, or what the shared disk says about it."""
+    return jobs.get(job_id) or _job_view_from_disk(job_id)
+
+
+def _signed_source_url(job_id: str) -> str:
+    """The URL to hand a `<video>` tag for this job's source.
+
+    Every place that returns a source URL to the browser must go through here:
+    a caller that builds the bare path instead ships a player that cannot
+    authenticate, and the clip editor's source monitor 404s in cloud while
+    working perfectly in self-host and in every test.
+    """
+    if not BILLING_ENABLED:
+        return f"/api/source/{job_id}"
+    exp = int(time.time()) + SOURCE_URL_TTL_SECONDS
+    return f"/api/source/{job_id}?exp={exp}&sig={_source_signature(job_id, exp)}"
+
+
+@app.get("/api/source-url/{job_id}")
+async def get_source_url(job_id: str, request: Request):
+    """Mint a short-lived signed URL for this job's source video.
+
+    A `<video src>` cannot carry an Authorization header, which is why
+    /api/source was left open in the first place. So the owner asks for a
+    capability URL here, with the bearer token, and hands the player that.
+    """
+    record = _job_record(job_id)
+    if record is not None:
+        await _assert_job_owner(request, record)
+    return {"url": _signed_source_url(job_id)}
+
+
 @app.get("/api/source/{job_id}")
-async def get_source_video(job_id: str):
+async def get_source_video(job_id: str, request: Request,
+                           exp: int = 0, sig: str = ""):
     """Stream a job's original source video for the live-analysis preview and
     the clip editor's source monitor.
 
     Uploaded sources are blob URLs in the browser and don't survive a reload,
-    so the recovered session points the preview here instead. Unauthenticated
-    like the /videos mount — the UUID job_id is the capability.
+    so the recovered session points the preview here instead.
+
+    This one endpoint serves the untouched original, which for a URL job is the
+    file we downloaded. Left open it is a public downloader wearing a UUID, so
+    a cloud job with an owner needs either a signed URL from /api/source-url or
+    a bearer token on the request. Self-host and ownerless BYOK jobs are
+    unchanged: there is no owner to check and no secret to sign with.
     """
+    signed = (
+        BILLING_ENABLED and sig
+        and exp > time.time()
+        and hmac.compare_digest(sig, _source_signature(job_id, exp))
+    )
+    # Gated on BILLING_ENABLED, not just on `signed`: _job_record falls through
+    # to _job_view_from_disk, which rescans the whole output directory. Off
+    # billing there is no owner to find, so that scan would run on every single
+    # preview load and buy nothing.
+    if not signed and BILLING_ENABLED:
+        record = _job_record(job_id)
+        if record is not None:
+            await _assert_job_owner(request, record)
     source_path = _locate_source(job_id)
     if not source_path:
         raise HTTPException(status_code=404, detail="Source not found")
@@ -3040,7 +3151,7 @@ async def get_clip_edl(job_id: str, clip_index: int, request: Request):
         "words": words_out,
         "source": {
             "available": bool(source_path),
-            "url": f"/api/source/{job_id}" if source_path else None,
+            "url": _signed_source_url(job_id) if source_path else None,
             "duration": source_duration,
             "duration_estimated": duration_estimated,
         },
