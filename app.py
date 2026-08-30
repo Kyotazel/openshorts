@@ -2552,7 +2552,17 @@ async def get_source_url(job_id: str, request: Request):
     capability URL here, with the bearer token, and hands the player that.
     """
     record = _job_record(job_id)
-    if record is not None:
+    if record is None:
+        # No record means no owner to check, and minting anyway would hand out
+        # a working key to whoever asked: the one door in this design that
+        # gives a capability without asking who you are. A real job resolves
+        # here (metadata recovers it, an in-flight one has a manifest naming
+        # its owner), so the only callers this turns away are asking about a
+        # job that does not exist. Off billing there is nothing to protect and
+        # the self-host preview must keep working.
+        if BILLING_ENABLED:
+            raise HTTPException(status_code=404, detail="Source not found")
+    else:
         await _assert_job_owner(request, record)
     return {"url": _signed_source_url(job_id)}
 

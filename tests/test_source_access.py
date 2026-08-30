@@ -176,3 +176,40 @@ def test_every_source_url_the_browser_gets_comes_from_one_place(job, monkeypatch
     assert r.status_code == 200, r.text
     assert r.json()["source"]["available"] is True
     assert r.json()["source"]["url"] == f"/signed/{JOB_ID}"
+
+
+class TestSourceUrlNeverMintsBlind:
+    """The minter must not hand a signed URL to a job it cannot identify."""
+
+    def test_self_host_still_answers_for_an_unknown_job(self, tmp_path, monkeypatch):
+        # Off billing there is no owner and no secret, and the preview has to
+        # keep working, so an unknown id is not something to refuse.
+        monkeypatch.setattr(app_module, "OUTPUT_DIR", str(tmp_path))
+        monkeypatch.setattr(app_module, "UPLOAD_DIR", str(tmp_path))
+        r = _get("/api/source-url/nobody-home")
+        assert r.status_code == 200
+        assert r.json()["url"] == "/api/source/nobody-home"
+
+    def test_cloud_refuses_instead_of_signing(self, tmp_path, monkeypatch):
+        # With billing on, an unresolvable job used to get a valid capability
+        # for the asking. It must 404 instead.
+        #
+        # _signed_source_url is stubbed so that reopening the hole fails on the
+        # assertion below and not on _cloud_config being None off-billing: a
+        # test that only passes because the minter happens to crash would stop
+        # guarding the moment the minter stopped crashing.
+        monkeypatch.setattr(app_module, "OUTPUT_DIR", str(tmp_path))
+        monkeypatch.setattr(app_module, "UPLOAD_DIR", str(tmp_path))
+        monkeypatch.setattr(app_module, "BILLING_ENABLED", True)
+        monkeypatch.setattr(app_module, "_signed_source_url", lambda j: f"/signed/{j}")
+        assert _get("/api/source-url/nobody-home").status_code == 404
+
+    def test_cloud_still_serves_the_owner(self, job, monkeypatch):
+        # The job fixture stamps user_id None (self-host style), which
+        # _assert_job_owner treats as "nothing to check", so this proves the
+        # refusal above is about the missing record and not a blanket block.
+        monkeypatch.setattr(app_module, "BILLING_ENABLED", True)
+        monkeypatch.setattr(app_module, "_signed_source_url", lambda j: f"/signed/{j}")
+        r = _get(f"/api/source-url/{JOB_ID}")
+        assert r.status_code == 200
+        assert r.json()["url"] == f"/signed/{JOB_ID}"
