@@ -198,7 +198,7 @@ const pollJob = async (jobId) => {
 
 function App() {
   // Cloud auth/billing session (inert when billing is disabled).
-  const { billingEnabled, isManaged, isSignedIn, me, plan, refreshMe, jobRetentionSeconds } = useAuth();
+  const { billingEnabled, isManaged, isSignedIn, me, plan, refreshMe, jobRetentionSeconds, localLlm } = useAuth();
   const [showLogin, setShowLogin] = useState(false);
   const [showTopUp, setShowTopUp] = useState(false);
   const [showPlanChoice, setShowPlanChoice] = useState(false);
@@ -705,7 +705,10 @@ function App() {
 
   // Hosted is paid-only (no BYOK core). Self-host uses BYOK keys.
   // `keysMissing` now means "self-host BYOK keys missing" — it never fires on hosted.
-  const keysMissing = !billingEnabled && (!apiKey || !uploadPostKey);
+  // A self-hosted server running the moment picker on a local LLM
+  // (LLM_BASE_URL) does not need a Gemini key for the core pipeline.
+  const geminiOk = !!apiKey || !!localLlm;
+  const keysMissing = !billingEnabled && (!geminiOk || !uploadPostKey);
   const needsPlan = billingEnabled && !isManaged;   // hosted, signed-out or no active plan/trial
 
   // Fresh sign-up: show the welcome plan-choice popup once (AuthContext set the
@@ -1167,9 +1170,9 @@ function App() {
               >
                 <AlertTriangle size={12} />
                 <span className="hidden md:inline">
-                  {!apiKey && !uploadPostKey
+                  {!geminiOk && !uploadPostKey
                     ? 'Gemini & Upload-Post keys missing'
-                    : !apiKey
+                    : !geminiOk
                       ? 'Gemini API Key Missing'
                       : 'Upload-Post API Key Missing'}
                 </span>
@@ -1187,9 +1190,9 @@ function App() {
               <div className="min-w-0">
                 <span className="font-medium text-ink">Required API keys missing.</span>{' '}
                 <span className="text-muted">
-                  {!apiKey && !uploadPostKey
+                  {!geminiOk && !uploadPostKey
                     ? 'Set your Gemini and Upload-Post API keys to use OpenShorts.'
-                    : !apiKey
+                    : !geminiOk
                       ? 'Set your Gemini API key to use OpenShorts.'
                       : 'Set your Upload-Post API key to use OpenShorts.'}
                 </span>
@@ -1926,9 +1929,9 @@ function App() {
         isOpen={showKeyModal}
         onClose={() => setShowKeyModal(false)}
         eyebrow="SETUP"
-        title={!apiKey && !uploadPostKey
+        title={!geminiOk && !uploadPostKey
           ? 'Required API Keys Missing'
-          : !apiKey
+          : !geminiOk
             ? 'Gemini API Key Required'
             : 'Upload-Post API Key Required'}
         footer={

@@ -23,6 +23,7 @@ from google.genai import types as genai_types
 
 import gemini_worker
 import layout_picker
+import llm_backend
 from clip_selection import (build_transcript_windows, clip_count_targets,
                             clip_duration_bounds, snap_clip_to_words,
                             trim_to_best)
@@ -1440,15 +1441,24 @@ def transcribe_video(video_path):
     return transcript
 
 def _run_gemini_stage(client, model_name, prompt, schema):
-    """One schema-enforced Gemini call with transient-error backoff.
-    Returns (parsed_dict, cost_analysis)."""
-    config = genai_types.GenerateContentConfig(
+    """One schema-enforced model call with transient-error backoff.
+    Returns (parsed_dict, cost_analysis).
+
+    With an OpenAI-compatible server configured (``llm_backend.active()``)
+    the call goes there instead of Gemini and ``client`` is unused; the
+    retry policy is shared because a local server has the same failure
+    shapes (connection refused while the model loads, a truncated body,
+    a 5xx from a busy vLLM)."""
+    use_local = llm_backend.active()
+    config = None if use_local else genai_types.GenerateContentConfig(
         response_mime_type="application/json",
         response_schema=schema,
     )
     max_attempts = 3
     for attempt in range(1, max_attempts + 1):
         try:
+            if use_local:
+                return llm_backend.generate_json(prompt, schema, model=model_name)
             response = client.models.generate_content(model=model_name, contents=prompt, config=config)
             # Policy blocks are deterministic — retrying only burns quota and
             # time, and the user deserves the real reason instead of a generic
@@ -1473,11 +1483,16 @@ def _run_gemini_stage(client, model_name, prompt, schema):
                 '503', 'UNAVAILABLE', '429', 'RESOURCE_EXHAUSTED',
                 '500', 'INTERNAL', 'overloaded', 'Deadline',
                 'empty response body', 'did not contain a JSON object',
-                'Failed to parse Gemini JSON response'))
+                'Failed to parse Gemini JSON response',
+                # OpenAI-compatible servers: model still loading, busy, or a
+                # small model that skipped a required field this time.
+                'ConnectError', 'ReadTimeout', 'RemoteProtocolError', '502', '504',
+                'validation error'))
             if attempt == max_attempts or not transient:
                 raise
             wait = 5 * (2 ** (attempt - 1))
-            print(f"⚠️ Gemini transient error (attempt {attempt}/{max_attempts}), retrying in {wait}s: {msg[:150]}")
+            who = "LLM server" if use_local else "Gemini"
+            print(f"⚠️ {who} transient error (attempt {attempt}/{max_attempts}), retrying in {wait}s: {msg[:150]}")
             time.sleep(wait)
 
 
@@ -1509,6 +1524,18 @@ def _run_stage_split(client, model_name, items, build_prompt, schema, key, costs
                 + _run_stage_split(client, model_name, items[mid:], build_prompt, schema, key, costs, label))
 
 
+def score_batch_size():
+    """Transcript windows per scoring call: ``LLM_SCORE_BATCH`` if set, else
+    8 for Gemini (1M context) and 3 for an OpenAI-compatible server."""
+    raw = os.environ.get("LLM_SCORE_BATCH", "").strip()
+    if raw:
+        try:
+            return max(1, int(raw))
+        except ValueError:
+            pass
+    return 3 if llm_backend.active() else 8
+
+
 def get_viral_clips(transcript_result, video_duration):
     """Two-pass clip selection: score transcript windows, then detail the best.
 
@@ -1517,15 +1544,21 @@ def get_viral_clips(transcript_result, video_duration):
     the expensive detail reasoning focused on the shortlist. Cuts are snapped to
     word boundaries so clips don't start/end mid-word.
     """
-    print("\U0001f916  Analyzing with Gemini (2-pass: score → detail)...")
-    api_key = os.getenv("GEMINI_API_KEY")
-    if not api_key:
-        print("❌ Error: GEMINI_API_KEY not found in environment variables.")
-        return None
-
-    client = genai.Client(api_key=api_key)
-    model_name = os.environ.get("GEMINI_MODEL") or 'gemini-3.1-flash-lite'
     language = str(transcript_result.get('language') or 'unknown')
+    if llm_backend.active():
+        # Self-hosted text model: no Google key needed for this stage.
+        client = None
+        model_name = llm_backend.model_name()
+        print(f"\U0001f916  Analyzing with local LLM at {llm_backend.base_url()} (2-pass: score → detail)...")
+    else:
+        print("\U0001f916  Analyzing with Gemini (2-pass: score → detail)...")
+        api_key = os.getenv("GEMINI_API_KEY")
+        if not api_key:
+            print("❌ Error: GEMINI_API_KEY not found in environment variables "
+                  "(set it, or point LLM_BASE_URL at an OpenAI-compatible server).")
+            return None
+        client = genai.Client(api_key=api_key)
+        model_name = os.environ.get("GEMINI_MODEL") or 'gemini-3.1-flash-lite'
     print(f"\U0001f916  Model: {model_name} | language: {language}")
 
     # Full word list — ground truth for snapping cut points.
@@ -1548,7 +1581,10 @@ def get_viral_clips(transcript_result, video_duration):
 
         # --- Pass 1: score windows in batches, keep the highest-scoring ---
         scored = []
-        SCORE_BATCH = 8
+        # Local models usually run with a 4-8k context (Ollama defaults to
+        # 4096 unless OLLAMA_CONTEXT_LENGTH says otherwise) and 8 windows of
+        # transcript do not fit; a silently truncated prompt scores garbage.
+        SCORE_BATCH = score_batch_size()
         def _payload(ws):
             return [{"id": w["id"], "start": w["start"], "end": w["end"], "text": w["text"]} for w in ws]
 
@@ -1654,7 +1690,12 @@ def get_visual_clips(video_path, video_duration, language="en"):
     print("🎥  Silent video — analyzing with Gemini vision (no transcript)...")
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
-        print("❌ Error: GEMINI_API_KEY not found.")
+        if llm_backend.active():
+            print("❌ This video has no usable speech, so it has to be clipped by "
+                  "watching it, and that needs Gemini (a text-only LLM server "
+                  "cannot see the footage). Add a GEMINI_API_KEY for silent videos.")
+        else:
+            print("❌ Error: GEMINI_API_KEY not found.")
         return None
     client = genai.Client(api_key=api_key)
     model_name = os.environ.get("GEMINI_MODEL") or 'gemini-3.1-flash-lite'
@@ -1885,7 +1926,7 @@ if __name__ == '__main__':
             # wrote no metadata.json, so app.py marked the job failed anyway
             # (app.py:1087) after burning GPU on a render nobody could see.
             raise RuntimeError(
-                "Clip detection failed — Gemini did not return usable clips for this video.")
+                "Clip detection failed — the AI model did not return usable clips for this video.")
         else:
             print(f"🔥 Found {len(clips_data['shorts'])} clips!")
 

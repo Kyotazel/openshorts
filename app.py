@@ -1,4 +1,5 @@
 import os
+import llm_backend
 import re
 import sys
 import uuid
@@ -1880,6 +1881,9 @@ async def get_config():
         "billingEnabled": BILLING_ENABLED,
         "googleAuthEnabled": bool(BILLING_ENABLED and cloud.settings.google_auth_enabled),
         "jobRetentionSeconds": JOB_RETENTION_SECONDS,
+        # Self-host only: tells the dashboard the Gemini key is optional
+        # because the moment picker runs on an OpenAI-compatible server.
+        "localLlm": None if BILLING_ENABLED else llm_backend.describe(),
     }
 
 async def _probe_youtube_quality(url: str) -> dict:
@@ -2117,7 +2121,11 @@ async def process_endpoint(
     upload_id: Optional[str] = Form(None),
 ):
     api_key = await resolve_gemini(request)
-    if not api_key:
+    if not api_key and not (llm_backend.active() and not BILLING_ENABLED):
+        # Self-host with an OpenAI-compatible server configured needs no
+        # Google key for the core pipeline: the moment picker runs there and
+        # the frame-based stages degrade on their own (layout_picker returns
+        # "none", silent videos fail with a message that says why).
         raise gemini_missing_error()
 
     ack_flag = str(acknowledged).lower() in ("1", "true", "yes")
@@ -2241,7 +2249,10 @@ async def process_endpoint(
     # probe above already gets this right.
     cmd = [sys.executable, "-u", "main.py"] # -u for unbuffered
     env = os.environ.copy()
-    env["GEMINI_API_KEY"] = api_key # Override with key from request
+    if api_key:
+        env["GEMINI_API_KEY"] = api_key # Override with key from request
+    else:
+        env.pop("GEMINI_API_KEY", None)  # local-LLM job: main.py must not find a stale key
     # The stdio fix above only covers this process. main.py prints an emoji on
     # its first line and configures nothing, so on a cp1252 console the child
     # still dies before it renders anything -- the server starts and every job

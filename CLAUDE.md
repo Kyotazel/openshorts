@@ -120,6 +120,19 @@ Gemini era de las medidas continuas, no del modelo.
 `layout_picker.apply()` sólo **añade**: una elección explícita del usuario nunca
 se desactiva porque el modelo diga `none`.
 
+### Local LLM for the moment picker (`llm_backend.py`)
+
+`LLM_BASE_URL` (+ `LLM_MODEL`, `LLM_API_KEY`) routes the two transcript
+passes of `get_viral_clips` to any OpenAI-compatible `/chat/completions`
+instead of Gemini; the response is validated with the same pydantic schemas
+Gemini enforces server-side, so `main.py` sees one shape. `main.score_batch_size`
+drops to 3 windows per call there (local contexts are 4-8k; a truncated
+prompt scores garbage silently). Self-host `/api/process` then accepts a
+request without `X-Gemini-Key` and `/api/config.localLlm` tells the dashboard
+not to demand one. Frame-based stages (`layout_picker`, `screencast_layout`,
+`get_visual_clips`) stay on Gemini and degrade as they always did without a
+key. Never wired in cloud mode: `BILLING_ENABLED` ignores it.
+
 ### Thumbnail Studio (`thumbnail.py`, `/api/thumbnail/*`)
 
 Titles come from the transcript plus 10 frames at 1024px, never the whole
