@@ -81,7 +81,7 @@ export default function Legal() {
                 </div>
 
                 <div className="space-y-3 mb-12">
-                    {DOCS.map(({ title, desc, href, es }) => (
+                    {DOCS.map(({ icon: Icon, title, desc, href, es }) => (
                         <a
                             key={href}
                             href={href}
