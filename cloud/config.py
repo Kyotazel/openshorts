@@ -219,6 +219,21 @@ class Settings:
     def stripe_webhook_secret(self) -> str:
         return os.environ.get("STRIPE_WEBHOOK_SECRET", "")
 
+    # AgentLedger (aikount.com) — issues the legally valid Spanish invoice for
+    # every Stripe charge; the account page lists them via /api/billing/invoices.
+    @property
+    def agentledger_api_url(self) -> str:
+        return os.environ.get("AGENTLEDGER_API_URL", "https://api.aikount.com/api/v1").rstrip("/")
+
+    @property
+    def agentledger_api_key(self) -> str:
+        return os.environ.get("AGENTLEDGER_API_KEY", "")
+
+    @property
+    def agentledger_treasury_id(self) -> str:
+        # The Stripe Connect treasury in AgentLedger that holds OpenShorts' customers.
+        return os.environ.get("AGENTLEDGER_TREASURY_ID", "720d3b70-3806-4c59-8729-2495b489a771")
+
     # Managed provider keys (server-owned, only handed to entitled users)
     @property
     def managed_gemini_key(self) -> str:
