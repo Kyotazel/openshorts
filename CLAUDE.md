@@ -120,6 +120,21 @@ Gemini era de las medidas continuas, no del modelo.
 `layout_picker.apply()` sólo **añade**: una elección explícita del usuario nunca
 se desactiva porque el modelo diga `none`.
 
+### Hook grounding for on-screen clips (`hook_grounding.py`)
+
+The hook and title come from the detail pass, which only reads the
+transcript, so on a clip whose meaning is on the screen (a settings dialog,
+a spreadsheet) they summarise the video's topic instead of naming what is
+shown. After the render, if the `<clip>.layout.json` sidecar says at least
+25% of the clip is `screencast` / `wide` / `inset`, three frames from those
+stretches at 1024px plus the clip's own words go to Gemini
+(`GroundedHook`) and `viral_hook_text` / `video_title_for_youtube_short`
+are rewritten in place before `auto_hook_clip` burns them; the originals
+stay under `hook_grounding.before`. Gemini-only (frames): with just a local
+LLM it logs one line and keeps the transcript hook. `HOOK_GROUNDING=0`
+disables it. The detail prompt itself now carries the rule "about this
+moment, not the video", which is the cheap half of the same fix.
+
 ### Local LLM for the moment picker (`llm_backend.py`)
 
 `LLM_BASE_URL` (+ `LLM_MODEL`, `LLM_API_KEY`) routes the two transcript

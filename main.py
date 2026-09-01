@@ -22,6 +22,7 @@ from google import genai
 from google.genai import types as genai_types
 
 import gemini_worker
+import hook_grounding
 import layout_picker
 import llm_backend
 from clip_selection import (build_transcript_windows, clip_count_targets,
@@ -1984,6 +1985,11 @@ if __name__ == '__main__':
                     # seam there, and /api/subtitle needs it again later.
                     import layout_ranges as _layouts
                     clip['layout_ranges'] = _layouts.read(clip_final_path)
+                    # The hook was written from the transcript alone. When the
+                    # render put this clip's meaning on the screen, rewrite hook
+                    # and title from three of its frames BEFORE burning them.
+                    if success and hook_grounding.wanted(clip['layout_ranges'], end - start):
+                        hook_grounding.reground(clip_final_path, clip, transcript, start, end)
                     if success and os.environ.get("AUTO_HOOK") == "1":
                         hooked = auto_hook_clip(clip_final_path, clip)
                         if hooked:
@@ -2022,7 +2028,7 @@ if __name__ == '__main__':
 
             # Persist per-clip render results added by the workers (auto_hook)
             # so the editor can see what is already burned into each clip.
-            if any('auto_hook' in c for c in shorts):
+            if any('auto_hook' in c or 'hook_grounding' in c for c in shorts):
                 with open(metadata_file, 'w') as f:
                     json.dump(clips_data, f, indent=2)
 
