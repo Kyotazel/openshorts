@@ -19,6 +19,9 @@
 //   - SocialNudgeSeen    — post-generation "connect socials" banner rendered
 //   - SocialNudgeConnect — its connect button clicked (opens hosted connect page)
 //   - SocialNudgeDismissed — its X clicked (persisted, never shown again)
+//   - ClipTutorialStarted  — first-login tutorial: user hit Start
+//   - ClipTutorialSkipped  — first-login tutorial dismissed (intro or coach)
+//   - ClipTutorialCompleted— first Clip Generator job finished with clips
 // The Started → Redirected → Subscribed chain is what separates "never reached
 // Stripe" from "reached Stripe and abandoned"; before 2-ago-2026 the modals
 // emitted only their own *Checkout event and the difference was invisible.
