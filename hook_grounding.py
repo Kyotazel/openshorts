@@ -35,11 +35,27 @@ def enabled() -> bool:
     return os.environ.get("HOOK_GROUNDING", "1").strip() != "0"
 
 
-def screen_ranges(ranges):
+def screen_video() -> bool:
+    """True when the layout picker (or the user) called this source a
+    screencast. On such a video a GENERAL stretch, which the scene classifier
+    emits for "no face in frame", is a full-screen slide, dialog or terminal
+    (verified on a product update video: every GENERAL scene was a stats
+    card), even when the width gate did not upgrade it to SCREENCAST."""
+    try:
+        import screencast_layout
+        return bool(getattr(screencast_layout, "ENABLED", False))
+    except Exception:
+        return False
+
+
+def screen_ranges(ranges, on_screen_video=None):
     """(start, end) pairs, clip seconds, of the stretches rendered on-screen."""
     import layout_ranges
+    layouts = set(SCREEN_LAYOUTS)
+    if screen_video() if on_screen_video is None else on_screen_video:
+        layouts.add("general")
     return [(r["start"], r["end"]) for r in layout_ranges.normalise(ranges)
-            if r["layout"] in SCREEN_LAYOUTS]
+            if r["layout"] in layouts]
 
 
 def wanted(ranges, clip_duration) -> bool:

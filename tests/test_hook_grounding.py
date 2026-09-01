@@ -19,11 +19,23 @@ MIXED = [{"start": 0, "end": 5, "layout": "track"},
 
 # --- when to run -----------------------------------------------------------
 
-def test_screen_layouts_trigger_and_face_layouts_do_not():
+def test_screen_layouts_trigger_and_face_layouts_do_not(monkeypatch):
+    monkeypatch.setattr(hg, "screen_video", lambda: False)
     assert hg.wanted(SCREEN, 30) is True
     assert hg.wanted(MIXED, 30) is True
     assert hg.wanted(FACE, 30) is False
     assert hg.wanted([], 30) is False
+
+
+def test_general_counts_as_screen_only_on_a_screencast_video(monkeypatch):
+    # The reported case: picker said screencast, the render emitted
+    # track/general only (stats cards have no face), grounding never ran.
+    general = [{"start": 0, "end": 8, "layout": "track"},
+               {"start": 8, "end": 30, "layout": "general"}]
+    monkeypatch.setattr(hg, "screen_video", lambda: True)
+    assert hg.wanted(general, 30) is True
+    monkeypatch.setattr(hg, "screen_video", lambda: False)
+    assert hg.wanted(general, 30) is False  # a group shot is not a screen
 
 
 def test_a_blip_is_not_enough(monkeypatch):

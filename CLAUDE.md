@@ -126,7 +126,9 @@ The hook and title come from the detail pass, which only reads the
 transcript, so on a clip whose meaning is on the screen (a settings dialog,
 a spreadsheet) they summarise the video's topic instead of naming what is
 shown. After the render, if the `<clip>.layout.json` sidecar says at least
-25% of the clip is `screencast` / `wide` / `inset`, three frames from those
+25% of the clip is `screencast` / `wide` / `inset` (plus `general` when the
+layout picker called the video a screencast: a face-less scene there is a
+slide or a dialog, not a group shot), three frames from those
 stretches at 1024px plus the clip's own words go to Gemini
 (`GroundedHook`) and `viral_hook_text` / `video_title_for_youtube_short`
 are rewritten in place before `auto_hook_clip` burns them; the originals
