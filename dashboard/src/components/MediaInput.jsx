@@ -108,7 +108,7 @@ export default function MediaInput({ onProcess, isProcessing }) {
 
     return (
         <div className="card p-4 sm:p-6 animate-fade">
-            <div className="flex gap-4 sm:gap-6 mb-6 border-b border-rule">
+            <div className="flex gap-4 sm:gap-6 mb-6 border-b border-rule" data-tutorial="source-tabs">
                 <button
                     onClick={() => setMode('file')}
                     className={`flex items-center gap-2 pb-3 px-1 -mb-px border-b-2 text-sm lowercase whitespace-nowrap transition-colors ${mode === 'file'
@@ -135,7 +135,7 @@ export default function MediaInput({ onProcess, isProcessing }) {
 
             <form onSubmit={handleSubmit}>
                 {mode === 'url' ? (
-                    <div className="space-y-4">
+                    <div className="space-y-4" data-tutorial="drop-zone">
                         <div className="relative">
                             <input
                                 type="url"
@@ -174,6 +174,7 @@ export default function MediaInput({ onProcess, isProcessing }) {
                     </div>
                 ) : (
                     <div
+                        data-tutorial="drop-zone"
                         className={`border-2 border-dashed rounded-card p-6 sm:p-8 text-center transition-colors ${file ? 'border-brass' : 'border-rule2 hover:border-brass'
                             }`}
                         onDragOver={(e) => e.preventDefault()}
@@ -208,7 +209,7 @@ export default function MediaInput({ onProcess, isProcessing }) {
                 )}
 
                 {/* Output format selector */}
-                <div className="mt-5">
+                <div className="mt-5" data-tutorial="output-format">
                     <p className="eyebrow mb-2">Output format</p>
                     <div className="grid grid-cols-3 gap-2">
                         {[
@@ -351,6 +352,7 @@ export default function MediaInput({ onProcess, isProcessing }) {
 
                 <button
                     type="submit"
+                    data-tutorial="generate"
                     disabled={isProcessing || !acknowledged || (mode === 'url' && !url) || (mode === 'file' && !file)}
                     className="w-full btn-primary mt-4"
                 >

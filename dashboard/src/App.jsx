@@ -1032,6 +1032,7 @@ function App() {
           return (
             <button
               key={item.id}
+              data-tutorial={item.id === 'dashboard' ? 'nav-clips' : undefined}
               onClick={() => goToTab(item.id)}
               title={tabLocked(item.id) ? 'Finish your first clips to unlock' : item.label}
               disabled={tabLocked(item.id)}
@@ -1135,6 +1136,7 @@ function App() {
             return (
               <button
                 key={item.id}
+                data-tutorial={item.id === 'dashboard' ? 'nav-clips' : undefined}
                 onClick={() => goToTab(item.id)}
                 disabled={tabLocked(item.id)}
                 aria-current={isActive ? 'page' : undefined}
@@ -1181,7 +1183,7 @@ function App() {
             >
               <Menu size={20} />
             </button>
-            <span className="md:hidden font-display lowercase text-base text-ink truncate">
+            <span data-tutorial="nav-clips" className="md:hidden font-display lowercase text-base text-ink truncate">
               {activeNav?.label || 'openshorts'}
             </span>
             {status !== 'idle' && (
