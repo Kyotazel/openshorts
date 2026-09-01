@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Film, Download, Copy, Check, ExternalLink, Loader2, Play, User } from 'lucide-react';
+import { Film, Download, Copy, Check, Loader2, Play, User } from 'lucide-react';
 import { getApiUrl } from '../config';
 import SegmentedControl from './ui/SegmentedControl';
 import Modal from './ui/Modal';
@@ -46,23 +46,13 @@ export default function UGCGallery() {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <p className="eyebrow mb-1">04 · UGC GALLERY</p>
-          <h2 className="font-display lowercase text-2xl md:text-3xl text-ink">ugc gallery</h2>
-          <p className="readout mt-2">
-            {loadingVideos ? '…' : videos.length} videos
-            {avatarsLoaded ? ` · ${avatars.length} avatars` : ''}
-          </p>
-        </div>
-        <a
-          href={getApiUrl('/gallery')}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="btn-quiet text-xs shrink-0"
-        >
-          <ExternalLink size={13} /> public gallery
-        </a>
+      <div>
+        <p className="eyebrow mb-1">04 · UGC GALLERY</p>
+        <h2 className="font-display lowercase text-2xl md:text-3xl text-ink">ugc gallery</h2>
+        <p className="readout mt-2">
+          {loadingVideos ? '…' : videos.length} videos
+          {avatarsLoaded ? ` · ${avatars.length} avatars` : ''}
+        </p>
       </div>
 
       <div className="max-w-xs w-full">
