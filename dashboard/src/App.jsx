@@ -480,6 +480,7 @@ function App() {
       }
     }
     setBulkSub({ running: false, current: total, total, errors });
+    refreshMe();
     // Refresh results so each ResultCard picks up its new subtitled video_url.
     try {
       const data = await pollJob(jobId);
@@ -662,11 +663,13 @@ function App() {
           if (data.status === 'completed') {
             setStatus('complete');
             clearInterval(interval);
+            refreshMe();
           } else if (data.status === 'failed') {
             setStatus('error');
             const errorMsg = data.error || (data.logs && data.logs.length > 0 ? data.logs[data.logs.length - 1] : "Process failed");
             setLogs(prev => [...prev, "Error: " + errorMsg]);
             clearInterval(interval);
+            refreshMe();
           } else {
             // Update logs if available
             if (data.logs) setLogs(data.logs);
@@ -677,7 +680,7 @@ function App() {
       }, 2000);
     }
     return () => clearInterval(interval);
-  }, [status, jobId]);
+  }, [status, jobId, refreshMe]);
 
 
   // silent: background auto-fetch — never alert(), just log. Managed users need
@@ -910,10 +913,13 @@ function App() {
       if (data.type === 'thumbnail_session') {
         setProcessingMedia({ type: 'server', payload: `/api/source/${resData.job_id}` });
       }
+      // Minutes are reserved at job start, not at complete.
+      refreshMe();
 
     } catch (e) {
       if (e instanceof QuotaError) {
         setStatus('idle');
+        refreshMe();
         // Trial users hit the trial minute cap → prompt them to activate the plan
         // now (unlocks full minutes). Active users → offer a top-up.
         if (me?.status === 'trialing') {
