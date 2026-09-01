@@ -332,6 +332,26 @@ Stripe retry the same doomed event for three days.
 ### Concurrency Model
 Async job queue with semaphore-based concurrency control. Configure via `MAX_CONCURRENT_JOBS` env var (default: 5). Jobs auto-cleanup after 1 hour.
 
+### Paid proxy accounting (`cloud/proxy_ledger.py`)
+
+Downloads go direct → static ISP proxies (flat rate) → DataImpulse (per GB),
+and the duration probe (`cloud/metering.probe_url_minutes`) follows the same
+order. Two rules keep the per-GB proxy at zero on a normal day: the probe
+reaches it **only** when a static route failed for a reason another IP can
+fix (`static_failure_warrants_paid`: bot-check, 403/429, proxy/network
+errors), never for a private/removed/members-only video or a live stream
+with no duration (those failed the same on every IP and used to cost ~1.7 MB
+× 2 extractors each), and **never for a non-YouTube URL** (the download
+plan already excluded those; Twitch, Kick, Rumble and product pages were
+reaching it through the probe). `main.py` prints `PROXY_ROUTE=<json>` after
+every download (winner, paid bytes across all attempts including failed
+paid ones, each free attempt's error); `app.py` persists it as a
+`proxy_usage` row at job end and pages Telegram when the paid proxy carried
+bytes, folding a burst into one message per 5 min. The in-memory monthly
+counter and the container log (rotates within the hour) cannot answer "what
+cost $14 on the 28th"; the table can. On the dev Mac, do not keep
+`PROXY_URL` in `.env`: every local `main.py` run then bills DataImpulse.
+
 ### Deploys and running jobs (handover + drain)
 
 Every push to `main` redeploys the API container. Coolify starts the NEW

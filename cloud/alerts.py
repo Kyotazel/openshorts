@@ -273,6 +273,13 @@ async def _watch_update(name, ok, detail):
 
 async def proxy_watch_tick():
     """One probe cycle over every configured route."""
+    # Paid-proxy events held back by the ledger's cooldown go out with the
+    # next tick at the latest (cloud/proxy_ledger.flush_alerts).
+    try:
+        from . import proxy_ledger
+        await proxy_ledger.flush_alerts()
+    except Exception:
+        pass
     for name, urls in _watch_targets():
         ok, detail = False, "no urls"
         for u in urls:

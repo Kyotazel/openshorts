@@ -307,6 +307,14 @@ async def reserve_process_minutes(request, url, input_path, job_id):
     except Exception:
         raise HTTPException(status_code=400,
                             detail="Could not determine the video duration. Try a different source.")
+    finally:
+        # A probe that had to reach the paid proxy leaves an event behind;
+        # record it (DB row + Telegram) whether or not the probe succeeded.
+        try:
+            from cloud import proxy_ledger as _pl
+            await _pl.drain_probe_events()
+        except Exception:
+            pass
     minutes = max(1, math.ceil(minutes))
 
     try:
@@ -1133,8 +1141,27 @@ _proxy_month = {"month": None, "bytes": 0, "alerted": False}
 PROXY_ALERT_GB = 100
 
 
+def _job_source_url(job) -> Optional[str]:
+    """The ``-u`` argument of the job's main.py command, if it was a URL job."""
+    cmd = list((job or {}).get('cmd') or [])
+    for flag in ('-u', '--url'):
+        if flag in cmd:
+            i = cmd.index(flag)
+            return cmd[i + 1] if i + 1 < len(cmd) else None
+    return None
+
+
 async def _track_proxy_usage(job_id):
-    nbytes = (jobs.get(job_id) or {}).get('proxy_bytes') or 0
+    job = jobs.get(job_id) or {}
+    # Durable trail + Telegram page whenever the per-GB proxy carried bytes
+    # (cloud mode only: self-host has no DB and pays nobody per GB).
+    if BILLING_ENABLED and job.get('proxy_route'):
+        try:
+            from cloud import proxy_ledger as _pl
+            await _pl.record_download(job_id, job.get('proxy_route'), _job_source_url(job))
+        except Exception as e:
+            print(f"⚠️ proxy ledger failed for {job_id}: {e}")
+    nbytes = job.get('proxy_bytes') or 0
     if not nbytes:
         return
     month = datetime.now(timezone.utc).strftime("%Y-%m")
@@ -1724,6 +1751,17 @@ def enqueue_output(out, job_id):
                         if job_id in jobs:
                             jobs[job_id]['proxy_bytes'] = int(decoded_line.split("=", 1)[1])
                     except ValueError:
+                        pass
+                    continue
+                if decoded_line.startswith("PROXY_ROUTE="):
+                    # Which download attempt won and why the free ones failed;
+                    # persisted at job end (cloud/proxy_ledger). Not shown to clients.
+                    try:
+                        from cloud import proxy_ledger as _pl
+                        route = _pl.parse_route_line(decoded_line)
+                        if route is not None and job_id in jobs:
+                            jobs[job_id]['proxy_route'] = route
+                    except Exception:
                         pass
                     continue
                 print(f"📝 [Job Output] {decoded_line}")

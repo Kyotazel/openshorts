@@ -20,6 +20,7 @@ import asyncio
 import json
 import math
 import os
+from urllib.parse import urlparse
 import random
 import subprocess
 from datetime import datetime, timezone, timedelta
@@ -64,6 +65,49 @@ def probe_file_minutes(path: str) -> float:
     return seconds / 60.0
 
 
+# Errors on a free (static) route that a different IP could fix. Only these
+# justify spending the per-GB proxy on the same URL; a private, removed or
+# members-only video fails the same on every IP, and a live stream has no
+# duration anywhere. Before this list every one of those went to the paid
+# proxy twice (both extractors), ~1.7 MB a time — the "1.76 MB, 2 requests"
+# rows that filled the DataImpulse panel on 31-aug-2026.
+_IP_SPECIFIC_HINTS = (
+    "sign in to confirm you", "not a bot", "http error 403", "http error 429",
+    "http error 407", "http error 502", "http error 503", "proxyerror",
+    "tunnel connection failed", "connection reset", "timed out", "timeout",
+    "unable to download webpage", "unable to download api page",
+    "available in your country", "in your country", "geo-restricted", "geoblock",
+    "blocked it in your country",
+    "remote end closed", "connection refused", "network is unreachable",
+    "name or service not known", "eof occurred",
+)
+_CONTENT_HINTS = (
+    "private video", "video unavailable", "has been removed", "members-only",
+    "join this channel", "not available on this app", "is not a valid url",
+    "unsupported url", "no video formats found", "premieres in", "will begin in",
+    "this live event", "no duration in metadata", "requested format is not available",
+    "account has been terminated", "video is age", "confirm your age",
+)
+
+
+def static_failure_warrants_paid(err) -> bool:
+    """Does this failure on a free route justify retrying through the paid proxy?"""
+    e = str(err or "").lower()
+    if any(h in e for h in _CONTENT_HINTS):
+        return False
+    return any(h in e for h in _IP_SPECIFIC_HINTS)
+
+
+# Paid-probe events queued for app.py (thread-safe enough: appended from the
+# executor thread that runs the probe, drained on the event loop).
+_paid_probe_events: list = []
+
+
+def pop_paid_probe_events() -> list:
+    out, _paid_probe_events[:] = list(_paid_probe_events), []
+    return out
+
+
 def plan_probe_proxies(direct_first, statics, paid):
     """Ordered proxies for a metadata probe — pure, unit-tested.
 
@@ -85,6 +129,12 @@ def plan_probe_proxies(direct_first, statics, paid):
     if paid:
         order.append(paid)
     return order
+
+
+def is_youtube_url(url: str) -> bool:
+    host = (urlparse(url or "").hostname or "").lower()
+    return host in ("youtube.com", "www.youtube.com", "m.youtube.com", "youtu.be",
+                    "music.youtube.com") or host.endswith(".youtube.com")
 
 
 def probe_url_minutes(url: str) -> float:
@@ -123,11 +173,18 @@ def probe_url_minutes(url: str) -> float:
     if statics:
         k = random.randrange(len(statics))
         statics = statics[k:] + statics[:k]
+    paid = os.environ.get("PROXY_URL", "").strip()
+    # Same rule as the download plan: a non-YouTube URL never touches the
+    # per-GB proxy (main.plan_download_attempts, youtube=False). Twitch, Kick,
+    # Rumble, product pages and drive links were all reaching it here.
+    if not is_youtube_url(url):
+        paid = ""
     proxies = plan_probe_proxies(
         os.environ.get("DIRECT_FIRST", "").strip() == "1",
         statics,
-        os.environ.get("PROXY_URL", "").strip(),
+        paid,
     )
+    static_errors: dict = {}
 
     # A dead route in the chain is routine (the proxy watcher is what reports
     # it, on Telegram); yt-dlp printing a full ERROR block per failed proxy per
@@ -143,6 +200,14 @@ def probe_url_minutes(url: str) -> float:
     # free route has failed on both extractors.
     last_err = None
     for proxy in proxies:
+        is_paid = bool(paid) and proxy == paid
+        if is_paid:
+            # Only spend the per-GB proxy when a free route failed for a
+            # reason another IP can fix. Content errors and "no duration"
+            # (live streams) are the same on every IP.
+            if not static_errors or not any(static_failure_warrants_paid(e)
+                                            for e in static_errors.values()):
+                break
         for extractor_args in strategies:
             opts = {"skip_download": True, "quiet": True, "no_warnings": True,
                     "logger": _QuietLogger(), "extractor_args": extractor_args}
@@ -153,6 +218,10 @@ def probe_url_minutes(url: str) -> float:
                     info = ydl.extract_info(url, download=False)
                 duration = info.get("duration")
                 if duration:
+                    if is_paid:
+                        _paid_probe_events.append({
+                            "url": url, "static_errors": dict(static_errors),
+                            "bytes_estimate": 1_800_000 * (1 + list(strategies).index(extractor_args))})
                     return float(duration) / 60.0
                 last_err = ValueError("no duration in metadata")
                 if info.get("extractor") == "generic":
@@ -163,8 +232,16 @@ def probe_url_minutes(url: str) -> float:
             except Exception as e:
                 last_err = e
         else:
+            if not is_paid:
+                static_errors[_route_name(proxy, proxies)] = str(last_err)[:300]
             continue
         break
+    if paid and any(p == paid for p in proxies) and static_errors and \
+            any(static_failure_warrants_paid(e) for e in static_errors.values()) and last_err is not None \
+            and not isinstance(last_err, ValueError):
+        # The paid route was tried and failed too: still worth a trail line.
+        _paid_probe_events.append({"url": url, "static_errors": dict(static_errors),
+                                   "bytes_estimate": 3_600_000, "paid_failed": str(last_err)[:200]})
     # Direct file URLs (agent uploads on tmpfiles/uguu/R2, a CDN mp4): ffprobe
     # fetches just the moov atom via range requests. Also the last resort for
     # any URL yt-dlp could not size.
@@ -175,6 +252,16 @@ def probe_url_minutes(url: str) -> float:
     except Exception as e:
         last_err = e
     raise ValueError(f"Could not determine video duration ({last_err})")
+
+
+def _route_name(proxy, proxies) -> str:
+    if proxy is None:
+        return "direct"
+    statics = [p for p in proxies if p is not None]
+    try:
+        return f"static{statics.index(proxy) + 1}"
+    except ValueError:
+        return "proxy"
 
 
 def _ffprobe_url_seconds(url: str, timeout: int = 30) -> float:

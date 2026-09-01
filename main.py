@@ -822,16 +822,22 @@ def download_youtube_video(url, output_dir="."):
 
     # Wire bytes actually pulled through the (paid) proxy, summed across
     # fragments/streams. Reported to app.py via the PROXY_BYTES= line below.
-    _dl_bytes = {"total": 0}
+    _dl_bytes = {"total": 0, "partial": 0}
 
     def _progress_hook(d):
-        if d.get('status') == 'finished':
+        if d.get('status') == 'downloading':
+            # Bytes of a fragment still in flight: a failed attempt has
+            # already paid for these even though 'finished' never fires.
+            _dl_bytes["partial"] = int(d.get('downloaded_bytes') or 0)
+        elif d.get('status') == 'finished':
+            _dl_bytes["partial"] = 0
             _dl_bytes["total"] += int(d.get('total_bytes')
                                       or d.get('total_bytes_estimate')
                                       or d.get('downloaded_bytes') or 0)
 
     def _attempt(extractor_args, fmt, proxy):
         _dl_bytes["total"] = 0
+        _dl_bytes["partial"] = 0
         with yt_dlp.YoutubeDL(_base_opts(extractor_args, proxy)) as ydl:
             info = ydl.extract_info(url, download=False)
         sanitized = sanitize_filename(info.get('title', 'youtube_video'))
@@ -869,6 +875,10 @@ def download_youtube_video(url, output_dir="."):
     sanitized_title = None
     last_err = None
     used_proxy = False
+    # Every attempt, with its bytes and failure text: printed as PROXY_ROUTE=
+    # below so app.py can keep a durable trail of WHY a job reached the paid
+    # proxy (the container log rotates within the hour; see cloud/proxy_ledger).
+    attempt_log = []
     for label, ea, fmt, proxy in attempts:
         # A 403 on the media fetch is usually transient: the googlevideo URL is
         # bound to the IP that extracted it, and the residential proxy rotates
@@ -882,10 +892,17 @@ def download_youtube_video(url, output_dir="."):
                 # the flat-rate static proxies are free bandwidth for the
                 # monthly counter's purposes.
                 used_proxy = proxy is not None and proxy == _proxy
+                attempt_log.append({"label": label, "ok": True,
+                                    "bytes": _dl_bytes["total"] + _dl_bytes["partial"],
+                                    "paid": used_proxy})
                 print(f"✅ Download succeeded ({label}).")
                 break
             except Exception as e:
                 last_err = e
+                attempt_log.append({"label": label, "ok": False,
+                                    "bytes": _dl_bytes["total"] + _dl_bytes["partial"],
+                                    "paid": proxy is not None and proxy == _proxy,
+                                    "error": str(e)[:300]})
                 print(f"⚠️  Download attempt '{label}' failed: {str(e)[:200]}")
                 retryable = '403' in str(e) or 'Forbidden' in str(e)
                 if not retryable or retry == 1:
@@ -917,12 +934,19 @@ Technical Details: {str(last_err)}
                 downloaded_file = os.path.join(output_dir, f)
                 break
 
-    if used_proxy and _dl_bytes["total"]:
+    # Paid bytes across EVERY attempt that used the per-GB proxy, failed ones
+    # included: a paid attempt that died after three 10 MB fragments was
+    # billed for them even though a later attempt won.
+    paid_bytes = sum(int(a.get("bytes") or 0) for a in attempt_log if a.get("paid"))
+    print("PROXY_ROUTE=" + json.dumps({
+        "winner": attempt_log[-1]["label"] if attempt_log and attempt_log[-1].get("ok") else None,
+        "paid_bytes": paid_bytes,
+        "attempts": attempt_log,
+    }, ensure_ascii=False))
+    if paid_bytes:
         # Machine-parseable marker consumed by app.py's log reader for the
         # monthly proxy-bandwidth counter. Not shown to clients (log filter).
-        # Only emitted when the winning attempt actually went through the
-        # proxy — direct-first successes are free bandwidth.
-        print(f"PROXY_BYTES={_dl_bytes['total']}")
+        print(f"PROXY_BYTES={paid_bytes}")
     print(f"✅ Video downloaded in {time.time() - step_start_time:.2f}s: {downloaded_file}")
     return downloaded_file, sanitized_title
 
