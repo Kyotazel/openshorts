@@ -101,8 +101,11 @@ meaning is on the screen, not in the face.
    allow (read visible titles and labels).
 2. `viral_hook_text`: max 10 words, in TRANSCRIPT_LANGUAGE. It MUST mention
    the thing you named in `on_screen` (or the action being done to it: set
-   up, connect, compare, fix, type). Never a summary of the video's general
-   topic, never a slogan that would fit any clip of this video.
+   up, connect, compare, fix, type) AND keep the strongest concrete fact of
+   the clip: a number, a multiplier, a price, a name ("7x faster", "$136 a
+   month", "3,400 stars") from the transcript or the current hook. Never a
+   summary of the video's general topic, never a slogan that would fit any
+   clip of this video, never drop a figure for a vaguer phrase.
 3. `video_title_for_youtube_short`: max 100 chars, same rule, in
    TRANSCRIPT_LANGUAGE, no fake claims.
 
