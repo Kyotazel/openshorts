@@ -3779,7 +3779,9 @@ async def _reframe_locked(req: ReframeRequest, request: Request, job, overrides)
 
 
 # --- Remotion Render Proxy ---
-RENDER_SERVICE_URL = os.getenv("RENDER_SERVICE_URL", "http://renderer:3100")
+# Bare-metal runs (PM2) have no docker DNS name "renderer" — default to
+# localhost so the render service is reachable out of the box. Override with RENDER_SERVICE_URL.
+RENDER_SERVICE_URL = os.getenv("RENDER_SERVICE_URL", "http://127.0.0.1:3100")
 
 @app.post("/api/render")
 async def proxy_render(request: Request):
