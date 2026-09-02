@@ -571,6 +571,36 @@ function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [jobId, status, results, activeTab, noSource, projectState]);
 
+  // Server-side session recovery: when THIS browser has no saved session
+  // (incognito, fresh tab, another device), pull the newest job from the
+  // server so past results stay visible in every session.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        if (localStorage.getItem(SESSION_KEY)) return;
+        const d = await apiJson('/api/jobs');
+        if (cancelled || !d.jobs || !d.jobs.length) return;
+        const top = d.jobs[0];
+        if (top.job_id === jobIdRef.current) return;
+        const data = await apiJson(`/api/status/${top.job_id}`);
+        if (cancelled) return;
+        setJobId(top.job_id);
+        setResults(data.result || null);
+        setProcessingMedia({ type: 'server', payload: `/api/source/${top.job_id}` });
+        setNoSource(false);
+        if (data.status === 'completed' || data.status === 'complete') setStatus('complete');
+        else if (data.status === 'failed' || data.status === 'error') setStatus('error');
+        else setStatus('processing');
+        setActiveTab('dashboard');
+      } catch (e) {
+        console.warn('Server job recovery skipped:', e);
+      }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   useEffect(() => {
     // Encrypt Gemini Key too for consistency if desired, but user asked specifically about Social integration not saving well.
     // For now keeping gemini plain for compatibility unless requested.

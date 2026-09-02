@@ -2533,6 +2533,87 @@ async def get_status(job_id: str, request: Request):
     }
 
 
+def _job_display_name(rec):
+    """Best-effort human name for a job record or its metadata dict."""
+    if not isinstance(rec, dict):
+        return None
+    for k in ("name", "title", "source_video", "video_title"):
+        v = rec.get(k)
+        if isinstance(v, str) and v.strip():
+            return os.path.basename(v.strip())
+    clips = (rec.get("result") or {}).get("clips")
+    if clips and isinstance(clips, list):
+        t = (clips[0] or {}).get("title")
+        if isinstance(t, str) and t.strip():
+            return t
+    return None
+
+
+@app.get("/api/jobs")
+async def list_jobs(request: Request):
+    """Jobs visible from ANY browser session (incognito/fresh tab included).
+
+    BYOK/self-host: every local job is listed, in-memory or on disk. Billing
+    mode: only the caller's own projects, best-effort.
+    """
+    user = None
+    if BILLING_ENABLED:
+        try:
+            from cloud.auth import get_current_user_required
+            user = await get_current_user_required(request)
+        except Exception:
+            return {"jobs": []}
+
+    def _visible(rec) -> bool:
+        if not BILLING_ENABLED:
+            return True
+        owner = rec.get("user_id")
+        if owner is None:
+            return True
+        return user is not None and str(owner) == str(user.id)
+
+    items, seen = [], set()
+    for job_id, rec in jobs.items():
+        if not isinstance(rec, dict) or not _visible(rec):
+            continue
+        seen.add(job_id)
+        job_path = os.path.join(OUTPUT_DIR, job_id)
+        mtime = os.path.getmtime(job_path) if os.path.isdir(job_path) else 0
+        created = rec.get("created_at") or rec.get("started_at") or mtime or 0
+        clips = (rec.get("result") or {}).get("clips") or []
+        items.append({
+            "job_id": job_id,
+            "status": _presented_status(job_id, rec),
+            "created": created,
+            "name": _job_display_name(rec) or job_id[:8],
+            "clips": len(clips),
+        })
+
+    if os.path.isdir(OUTPUT_DIR):
+        for entry in os.listdir(OUTPUT_DIR):
+            job_path = os.path.join(OUTPUT_DIR, entry)
+            if entry in seen or not os.path.isdir(job_path):
+                continue
+            metas = glob.glob(os.path.join(job_path, "*_metadata.json"))
+            if not metas:
+                continue
+            try:
+                with open(metas[0], encoding="utf-8") as f:
+                    meta = json.load(f)
+            except Exception:
+                continue
+            items.append({
+                "job_id": entry,
+                "status": "completed",
+                "created": os.path.getmtime(metas[0]),
+                "name": _job_display_name(meta) or entry[:8],
+                "clips": len(meta.get("shorts") or []),
+            })
+
+    items.sort(key=lambda x: (x.get("created") or 0), reverse=True)
+    return {"jobs": items[:50]}
+
+
 def _locate_source(job_id: str):
     """Find a job's source video on disk, or None.
 
