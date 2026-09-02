@@ -105,11 +105,16 @@ def _get_whisper_model():
     if _whisper_force_cpu:
         cfg["device"] = "cpu"
         cfg["compute_type"] = "int8"
-    key = (cfg["model_size"], cfg["device"], cfg["compute_type"])
+    key = (cfg["model_size"], cfg["device"], cfg["compute_type"], cfg["cpu_threads"])
     with _whisper_lock:
         if _whisper_model is None or _whisper_key != key:
             from faster_whisper import WhisperModel
-            _whisper_model = WhisperModel(key[0], device=key[1], compute_type=key[2])
+            _whisper_model = WhisperModel(
+                key[0],
+                device=key[1],
+                compute_type=key[2],
+                cpu_threads=key[3],
+            )
             _whisper_key = key
     return _whisper_model, cfg["device"]
 

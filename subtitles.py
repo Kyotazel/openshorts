@@ -21,6 +21,10 @@ def get_whisper_config():
         "model_size": os.environ.get("WHISPER_MODEL", DEFAULT_WHISPER_MODEL),
         "device": os.environ.get("WHISPER_DEVICE", "cpu"),
         "compute_type": os.environ.get("WHISPER_COMPUTE", "int8"),
+        # 0 = let CTranslate2 pick; set WHISPER_CPU_THREADS (e.g. 16) on
+        # multi-core CPU servers to parallelize the encoder and speed up
+        # transcriptions of long media.
+        "cpu_threads": int(os.environ.get("WHISPER_CPU_THREADS", "0")),
     }
 
 
