@@ -65,7 +65,9 @@ Persist on the clip dict / `*_metadata.json`:
 
 ### Recut / restyle (v1 limitation)
 
-Initial process only. Fast recut and `/api/subtitle` restyle **do not** re-apply the bumper. Document in the UI as “iklan masuk saat generate, bukan saat recut”. Follow-up can replay overlay from `ad_insert` after restyle.
+Initial process only. Fast recut and `/api/subtitle` restyle **do not** re-apply the bumper.
+
+On-demand insert for **already finished** clips (result-card **add ads** modal) is specified in `2026-09-03-autoaudit-midroll-ondemand-design.md`. That path still does not auto-replay after recut/restyle.
 
 ## Library storage
 
