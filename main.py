@@ -2026,6 +2026,54 @@ if __name__ == '__main__':
                         captioned = auto_caption_clip(
                             deliver_path, transcript, start, end,
                             split_ranges=_layouts.split_ranges(clip['layout_ranges']))
+                        deliver_path = captioned or deliver_path
+                        if os.environ.get("INSERT_AD", "").strip() == "1":
+                            try:
+                                import ad_library as _ads
+                                import ad_insert as _adins
+                                ad_path = _ads.active_path()
+                                if ad_path:
+                                    clip_dur = end - start
+                                    ad_dur = _ads.probe_duration(ad_path) or 3.0
+                                    if ad_dur > 5.0:
+                                        ad_dur = 5.0
+                                    hook_end = 3.0 if os.environ.get("AUTO_HOOK") == "1" else 0.0
+                                    words = []
+                                    for seg in (transcript or {}).get("segments") or []:
+                                        for w in seg.get("words") or []:
+                                            ws, we = w.get("start"), w.get("end")
+                                            if ws is None or we is None:
+                                                continue
+                                            if we < start or ws > end:
+                                                continue
+                                            words.append({
+                                                "start": float(ws) - start,
+                                                "end": float(we) - start,
+                                            })
+                                    window = _adins.pick_ad_window(
+                                        clip_dur, ad_dur, words, hook_end=hook_end)
+                                    if window:
+                                        new_path = _adins.insert_ad_clip(
+                                            deliver_path, ad_path, window[0], ad_dur)
+                                        if new_path:
+                                            deliver_path = new_path
+                                            aid = os.path.splitext(
+                                                os.path.basename(ad_path))[0]
+                                            item = next(
+                                                (it for it in (_ads.read_manifest().get("items") or [])
+                                                 if it.get("id") == aid),
+                                                None,
+                                            )
+                                            clip["ad_insert"] = {
+                                                "start": window[0],
+                                                "end": window[1],
+                                                "source_id": (item or {}).get("id") or aid,
+                                                "source_name": (item or {}).get("original_name")
+                                                or os.path.basename(ad_path),
+                                            }
+                            except Exception as e:
+                                print(f"⚠️ Ad insert skipped ({type(e).__name__}: {e})",
+                                      flush=True)
                         print(f"   ✅ Clip {i+1} ready: {clip_final_path}")
                         # Hand the API the file to actually serve for this clip.
                         # Without it the status poller guesses the clean reframe
@@ -2033,10 +2081,10 @@ if __name__ == '__main__':
                         # its hook and captions until the WHOLE job finished and
                         # the result got rebuilt through _canonical_clip_file.
                         # Printed only after the full chain (reframe, watermark,
-                        # hook, captions) so the file is complete when it is
-                        # announced, never one that ffmpeg is still writing.
+                        # hook, captions, optional ad insert) so the file is
+                        # complete when it is announced.
                         print(f"CLIP_READY {i} "
-                              f"{os.path.basename(captioned or deliver_path)}")
+                              f"{os.path.basename(deliver_path)}")
                     return success
                 finally:
                     if os.path.exists(clip_temp_path):
@@ -2056,7 +2104,8 @@ if __name__ == '__main__':
 
             # Persist per-clip render results added by the workers (auto_hook)
             # so the editor can see what is already burned into each clip.
-            if any('auto_hook' in c or 'hook_grounding' in c for c in shorts):
+            if any('auto_hook' in c or 'hook_grounding' in c or 'ad_insert' in c
+                   for c in shorts):
                 with open(metadata_file, 'w') as f:
                     json.dump(clips_data, f, indent=2)
 

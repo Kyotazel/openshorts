@@ -19,6 +19,9 @@ downloads/
 videos/
 output/
 
+# AutoAudit mid-roll library (operator-uploaded bumpers)
+ad_library/
+
 # OS / IDE
 .DS_Store
 .idea/

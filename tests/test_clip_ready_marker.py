@@ -71,7 +71,9 @@ class TestMainAnnouncesTheDeliveredFile:
         """
         main_src = open("main.py", encoding="utf-8").read()
         caption_at = main_src.index("captioned = auto_caption_clip(")
+        ad_at = main_src.index("insert_ad_clip(")
         marker_at = main_src.index('print(f"CLIP_READY {i} "')
-        assert caption_at < marker_at
+        assert caption_at < ad_at < marker_at
         marker_line = main_src[marker_at:marker_at + 200]
-        assert "captioned or deliver_path" in marker_line
+        assert "deliver_path" in marker_line
+        assert "INSERT_AD" in main_src[caption_at:marker_at]

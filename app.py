@@ -1922,7 +1922,74 @@ async def get_config():
         # Self-host only: tells the dashboard the Gemini key is optional
         # because the moment picker runs on an OpenAI-compatible server.
         "localLlm": None if BILLING_ENABLED else llm_backend.describe(),
+        "adLibrary": (not BILLING_ENABLED),
     }
+
+
+def _ad_library_guard():
+    if BILLING_ENABLED:
+        raise HTTPException(status_code=404, detail="Ad library is self-host only")
+
+
+@app.get("/api/ad-library")
+async def ad_library_get():
+    _ad_library_guard()
+    import ad_library as ads
+    return ads.read_manifest()
+
+
+@app.post("/api/ad-library")
+async def ad_library_add(file: UploadFile = File(...)):
+    _ad_library_guard()
+    import tempfile
+    import ad_library as ads
+    name = file.filename or "ad.mp4"
+    suffix = os.path.splitext(name)[1] or ".mp4"
+    fd, tmp = tempfile.mkstemp(suffix=suffix)
+    os.close(fd)
+    ad_max = 20 * 1024 * 1024
+    try:
+        size = 0
+        with open(tmp, "wb") as out:
+            while True:
+                chunk = await file.read(1024 * 1024)
+                if not chunk:
+                    break
+                size += len(chunk)
+                if size > ad_max:
+                    raise HTTPException(status_code=413, detail="Ad clip too large (max 20 MB)")
+                out.write(chunk)
+        try:
+            return ads.add_item(tmp, name)
+        except ads.BadAdFile as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        except ads.LibraryFull as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+    finally:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+
+
+@app.post("/api/ad-library/{item_id}/activate")
+async def ad_library_activate(item_id: str):
+    _ad_library_guard()
+    import ad_library as ads
+    try:
+        return ads.activate(item_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Not found")
+
+
+@app.delete("/api/ad-library/{item_id}")
+async def ad_library_delete(item_id: str):
+    _ad_library_guard()
+    import ad_library as ads
+    try:
+        return ads.delete_item(item_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Not found")
 
 async def _probe_youtube_quality(url: str) -> dict:
     """Run quality_probe.py in a worker thread; {} on any failure (fail-open)."""
@@ -2157,6 +2224,7 @@ async def process_endpoint(
     thumbnail_session_id: Optional[str] = Form(None),
     captions: Optional[str] = Form(None),
     upload_id: Optional[str] = Form(None),
+    insert_ad: Optional[str] = Form(None),
 ):
     api_key = await resolve_gemini(request)
     if not api_key and not (llm_backend.active() and not BILLING_ENABLED):
@@ -2188,6 +2256,7 @@ async def process_endpoint(
         thumbnail_session_id = body.get("thumbnail_session_id")
         captions = body.get("captions")
         upload_id = body.get("upload_id")
+        insert_ad = body.get("insert_ad")
 
     # Normalize output format (auto = keep pipeline default).
     if output_format not in ("vertical", "horizontal", "square"):
@@ -2314,6 +2383,18 @@ async def process_endpoint(
         if auto_hook_style in HOOK_STYLES:
             env["AUTO_HOOK_STYLE"] = auto_hook_style
         print(f"[auto-hook] job={job_id} style={env.get('AUTO_HOOK_STYLE', 'classic')}")
+
+    import ad_library as _adlib
+    _ins = str(insert_ad).lower() if insert_ad is not None else ""
+    if _ins in ("1", "true", "yes"):
+        requested_ad = True
+    elif _ins in ("0", "false", "no"):
+        requested_ad = False
+    else:
+        requested_ad = None
+    env.update(_adlib.insert_ad_env(requested_ad, bool(_adlib.active_path())))
+    if env.get("INSERT_AD") == "1":
+        print(f"[ad-insert] job={job_id} active={_adlib.active_path()}")
 
     # Manual generation controls (discussion #65): optional clip-count target
     # and duration band, forwarded to the selection prompts via the same env

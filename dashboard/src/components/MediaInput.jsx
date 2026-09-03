@@ -36,6 +36,12 @@ export default function MediaInput({ onProcess, isProcessing }) {
     const [layout, setLayout] = useState(() => {
         try { return localStorage.getItem('os_layout') || 'auto'; } catch { return 'auto'; }
     });
+    const [insertAd, setInsertAd] = useState(() => {
+        try { return localStorage.getItem('os_insert_ad') !== '0'; } catch { return true; }
+    });
+    const [adLibrary, setAdLibrary] = useState(null); // null = hidden (cloud/404)
+    const [adBusy, setAdBusy] = useState(false);
+    const adFileRef = useRef(null);
     const infoRef = useRef(null);
 
     // Close the compatibility popover on any outside click.
@@ -49,15 +55,43 @@ export default function MediaInput({ onProcess, isProcessing }) {
     }, [showInfo]);
 
     useEffect(() => {
-        fetch(getApiUrl('/api/config'))
-            .then((r) => r.ok ? r.json() : null)
-            .then((cfg) => {
+        let cancelled = false;
+        (async () => {
+            let hideLibrary = false;
+            try {
+                const r = await fetch(getApiUrl('/api/config'));
+                const cfg = r.ok ? await r.json() : null;
+                if (cancelled) return;
                 if (cfg && cfg.youtubeUrlEnabled === false) {
                     setYoutubeUrlEnabled(false);
                     setMode('file');
                 }
-            })
-            .catch(() => {});
+                if (cfg && (cfg.adLibrary === false || cfg.billingEnabled)) {
+                    hideLibrary = true;
+                }
+            } catch {
+                /* config is optional; still try the library */
+            }
+            if (hideLibrary) {
+                if (!cancelled) setAdLibrary(null);
+                return;
+            }
+            try {
+                const r = await fetch(getApiUrl('/api/ad-library'));
+                if (cancelled) return;
+                if (r.status === 404) {
+                    setAdLibrary(null);
+                    return;
+                }
+                if (!r.ok) return;
+                const man = await r.json();
+                setAdLibrary(man);
+                if (!man.active_id) setInsertAd(false);
+            } catch {
+                /* self-host without the route yet: keep the block hidden */
+            }
+        })();
+        return () => { cancelled = true; };
     }, []);
 
     // A link pasted in the landing hero: preload it here so the user picks up
@@ -85,11 +119,13 @@ export default function MediaInput({ onProcess, isProcessing }) {
             autoHook,
             autoHookStyle,
             layout,
+            insertAd,
         };
         try {
             localStorage.setItem('os_auto_hook', autoHook ? '1' : '0');
             localStorage.setItem('os_auto_hook_style', autoHookStyle);
             localStorage.setItem('os_layout', layout);
+            localStorage.setItem('os_insert_ad', insertAd ? '1' : '0');
         } catch { /* ignore */ }
         if (mode === 'url' && url) {
             onProcess({ type: 'url', payload: url, acknowledged: true, outputFormat, ...advanced });
@@ -334,6 +370,81 @@ export default function MediaInput({ onProcess, isProcessing }) {
                                     </select>
                                 )}
                             </div>
+                            {adLibrary && (
+                                <div className="col-span-1 sm:col-span-3 pt-3 sm:pt-1 border-t border-rule space-y-2">
+                                    <label className="flex items-center gap-2 text-xs text-ink2 cursor-pointer select-none">
+                                        <input
+                                            type="checkbox"
+                                            checked={insertAd}
+                                            onChange={(e) => setInsertAd(e.target.checked)}
+                                            disabled={!adLibrary.active_id}
+                                            className="w-4 h-4 shrink-0 accent-[var(--color-accent)] cursor-pointer"
+                                        />
+                                        Sisipkan iklan AutoAudit
+                                    </label>
+                                    <p className="text-[11px] leading-relaxed text-muted">
+                                        1 clip 2–5 dtk setelah hook. Suara podcast tetap; subtitle disembunyikan di jendela itu. Iklan masuk saat generate, bukan saat recut.
+                                    </p>
+                                    {adLibrary.active_id ? (
+                                        <p className="text-[11px] text-ink2">
+                                            Aktif: {(adLibrary.items || []).find((it) => it.id === adLibrary.active_id)?.original_name || adLibrary.active_id}
+                                        </p>
+                                    ) : (
+                                        <p className="text-[11px] text-muted">Upload clip iklan (2–5 detik)</p>
+                                    )}
+                                    <input
+                                        ref={adFileRef}
+                                        type="file"
+                                        accept="video/mp4,video/quicktime,video/webm,.mp4,.mov,.webm"
+                                        className="hidden"
+                                        onChange={async (e) => {
+                                            const f = e.target.files && e.target.files[0];
+                                            e.target.value = '';
+                                            if (!f) return;
+                                            setAdBusy(true);
+                                            try {
+                                                const body = new FormData();
+                                                body.append('file', f);
+                                                const r = await fetch(getApiUrl('/api/ad-library'), { method: 'POST', body });
+                                                if (!r.ok) throw new Error('upload failed');
+                                                const listed = await fetch(getApiUrl('/api/ad-library')).then((x) => x.json());
+                                                setAdLibrary(listed);
+                                                if (listed.active_id) setInsertAd(true);
+                                            } catch {
+                                                /* keep previous library */
+                                            } finally {
+                                                setAdBusy(false);
+                                            }
+                                        }}
+                                    />
+                                    <div className="flex flex-wrap gap-2">
+                                        <button
+                                            type="button"
+                                            disabled={adBusy}
+                                            onClick={() => adFileRef.current && adFileRef.current.click()}
+                                            className="text-[11px] underline underline-offset-2 text-ink2 hover:text-brass"
+                                        >
+                                            {adBusy ? 'Mengunggah…' : 'Upload clip iklan'}
+                                        </button>
+                                        {(adLibrary.items || []).filter((it) => it.id !== adLibrary.active_id).map((it) => (
+                                            <button
+                                                key={it.id}
+                                                type="button"
+                                                className="text-[11px] underline underline-offset-2 text-muted hover:text-ink2"
+                                                onClick={async () => {
+                                                    const r = await fetch(getApiUrl(`/api/ad-library/${it.id}/activate`), { method: 'POST' });
+                                                    if (!r.ok) return;
+                                                    const man = await r.json();
+                                                    setAdLibrary(man);
+                                                    setInsertAd(true);
+                                                }}
+                                            >
+                                                Aktifkan {it.original_name}
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
                         </div>
                     )}
                 </div>
