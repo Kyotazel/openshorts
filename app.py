@@ -31,6 +31,7 @@ from pydantic import BaseModel
 from s3_uploader import upload_job_artifacts, list_all_clips, upload_actor_to_s3, list_actor_gallery, upload_video_to_gallery, list_video_gallery
 import recut
 import layout_ranges
+from download_format import scrub_node_ipc_env
 
 load_dotenv()
 
@@ -896,6 +897,7 @@ def _resume_interrupted_jobs() -> set:
         # Rebuild env from scratch — the manifest holds no secrets. Managed
         # (cloud) jobs get the server key; self-host falls back to its env key.
         env = os.environ.copy()
+        scrub_node_ipc_env(env)
         if BILLING_ENABLED and user_id is not None:
             try:
                 env["GEMINI_API_KEY"] = managed_keys.gemini_key()
@@ -1998,6 +2000,7 @@ async def _probe_youtube_quality(url: str) -> dict:
             proc = subprocess.run(
                 [sys.executable, QUALITY_PROBE_SCRIPT, "--url", url],
                 capture_output=True, timeout=75,
+                env=scrub_node_ipc_env(os.environ.copy()),
             )
             return json.loads(proc.stdout.decode(errors="replace").strip() or "{}")
         except Exception as e:
@@ -2356,6 +2359,7 @@ async def process_endpoint(
     # probe above already gets this right.
     cmd = [sys.executable, "-u", "main.py"] # -u for unbuffered
     env = os.environ.copy()
+    scrub_node_ipc_env(env)
     if api_key:
         env["GEMINI_API_KEY"] = api_key # Override with key from request
     else:

@@ -51,3 +51,19 @@ def youtube_download_format(capped=False, max_height="max"):
         f"bestvideo[height<=?{h_val}]{_NO_AV1}+bestaudio/"
         f"best[height<=?{h_val}]{_NO_AV1}"
     )
+
+
+_NODE_IPC_KEYS = ("NODE_CHANNEL_FD", "NODE_CHANNEL_SERIALIZATION_MODE")
+
+
+def scrub_node_ipc_env(env=None):
+    """Drop PM2/Node IPC fds so Deno (yt-dlp EJS) can start.
+
+    Under PM2 the job inherits ``NODE_CHANNEL_FD``. Deno then dies with
+    ``fd is not from BiPipe`` and YouTube lists no video formats. A shell
+    ``yt-dlp -F`` works because bash does not set that variable.
+    """
+    target = os.environ if env is None else env
+    for key in _NODE_IPC_KEYS:
+        target.pop(key, None)
+    return target

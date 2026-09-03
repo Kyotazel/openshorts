@@ -18,6 +18,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+from download_format import scrub_node_ipc_env
+
 
 def _find_cookies_path():
     # Mirrors main.py's cookie discovery.
@@ -36,6 +38,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Probe available YouTube quality for a URL.")
     parser.add_argument("--url", required=True)
     args = parser.parse_args()
+    scrub_node_ipc_env()
 
     result = {"max_height": 0, "mode": None, "cookies_invalid": False, "duration": 0}
     try:

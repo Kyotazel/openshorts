@@ -47,3 +47,13 @@ class TestDownloadSourceHeight:
     def test_garbage_falls_back_to_max(self, monkeypatch):
         monkeypatch.setenv("DOWNLOAD_SOURCE_HEIGHT", "uhd")
         assert df.download_source_height() == "max"
+
+
+class TestScrubNodeIpcEnv:
+    def test_drops_pm2_ipc_keys_from_a_copy(self):
+        env = {"NODE_CHANNEL_FD": "3", "NODE_CHANNEL_SERIALIZATION_MODE": "json",
+               "PATH": "/usr/bin"}
+        df.scrub_node_ipc_env(env)
+        assert "NODE_CHANNEL_FD" not in env
+        assert "NODE_CHANNEL_SERIALIZATION_MODE" not in env
+        assert env["PATH"] == "/usr/bin"

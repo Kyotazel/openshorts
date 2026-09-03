@@ -28,7 +28,7 @@ import llm_backend
 from clip_selection import (build_transcript_windows, clip_count_targets,
                             clip_duration_bounds, snap_clip_to_words,
                             trim_to_best)
-from download_format import download_source_height, youtube_download_format
+from download_format import download_source_height, youtube_download_format, scrub_node_ipc_env
 from ffmpeg_utils import (video_encode_args, audio_encode_args, QUALITY,
                           QUALITY_FAST, METADATA_SCRUB)
 from dotenv import load_dotenv
@@ -737,6 +737,7 @@ def download_youtube_video(url, output_dir="."):
     print(f"🔍 Debug: yt-dlp version: {yt_dlp.version.__version__}")
     print("📥 Downloading video from YouTube...")
     step_start_time = time.time()
+    scrub_node_ipc_env()
 
     cookies_path = '/app/cookies.txt'
     cookies_env = os.environ.get("YOUTUBE_COOKIES")
