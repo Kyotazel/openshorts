@@ -19,6 +19,8 @@ Invariants the consumers rely on (clip cutting, karaoke subtitles, Remotion):
   - words sorted by start, segments chronological, absolute file timestamps.
 
 TRANSCRIBE_BACKEND env: "whisper" (default) | "parakeet".
+OPENROUTER_TRANSCRIBE_MODEL, when set, is tried first (5-minute chunks via
+OpenRouter Whisper) and falls back to the local backend on failure.
 The parakeet path falls back to whisper automatically when the model errors,
 produces no usable words, or the detected language is outside its 25
 supported European languages (e.g. Japanese/Chinese/Arabic uploads).
@@ -36,6 +38,7 @@ from subtitles import (
     WHISPER_TRANSCRIBE_PARAMS,
     merge_continuation_words,
 )
+import openrouter_stt
 
 PARAKEET_MODEL_ID = "nemo-parakeet-tdt-0.6b-v3"
 
@@ -365,6 +368,16 @@ def transcribe_media(media_path):
         raise NoAudioError(
             "This video has no audio track. OpenShorts finds viral moments from "
             "speech, so it needs a video with audio.")
+
+    if openrouter_stt.configured_model():
+        try:
+            transcript = openrouter_stt.transcribe(media_path)
+            print(f"🎙️ [ASR] openrouter ok: lang={transcript['language']} "
+                  f"segments={len(transcript['segments'])}", flush=True)
+            return transcript
+        except Exception as e:
+            print(f"⚠️ [ASR] openrouter failed ({type(e).__name__}: {e}) — "
+                  f"falling back to local", flush=True)
 
     backend = os.environ.get("TRANSCRIBE_BACKEND", "whisper").strip().lower()
 

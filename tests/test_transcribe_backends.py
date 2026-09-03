@@ -140,6 +140,7 @@ def test_transcribe_media_falls_back_on_parakeet_exception(monkeypatch):
         raise RuntimeError("onnx exploded")
 
     sentinel = {"text": "ok", "language": "en", "segments": []}
+    monkeypatch.delenv("OPENROUTER_TRANSCRIBE_MODEL", raising=False)
     monkeypatch.setenv("TRANSCRIBE_BACKEND", "parakeet")
     monkeypatch.setattr(tb, "_has_audio_stream", lambda path: True)
     monkeypatch.setattr(tb, "_transcribe_with_parakeet", boom)
@@ -150,6 +151,7 @@ def test_transcribe_media_falls_back_on_parakeet_exception(monkeypatch):
 def test_transcribe_media_default_is_whisper(monkeypatch):
     sentinel = {"text": "ok", "language": "en", "segments": []}
     monkeypatch.delenv("TRANSCRIBE_BACKEND", raising=False)
+    monkeypatch.delenv("OPENROUTER_TRANSCRIBE_MODEL", raising=False)
     monkeypatch.setattr(tb, "_has_audio_stream", lambda path: True)
     monkeypatch.setattr(
         tb, "_transcribe_with_parakeet",
