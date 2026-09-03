@@ -28,6 +28,7 @@ import llm_backend
 from clip_selection import (build_transcript_windows, clip_count_targets,
                             clip_duration_bounds, snap_clip_to_words,
                             trim_to_best)
+from download_format import download_source_height, youtube_download_format
 from ffmpeg_utils import (video_encode_args, audio_encode_args, QUALITY,
                           QUALITY_FAST, METADATA_SCRUB)
 from dotenv import load_dotenv
@@ -692,7 +693,7 @@ def plan_download_attempts(direct_first, statics, paid, have_hd, youtube=True):
     static proxy as the only fallback; the paid per-GB proxy is never used.
 
     Cheapest bandwidth first: the server's own IP, then the flat-rate static
-    ISP proxies (uncapped 1080p, free bytes), then the per-GB paid proxy
+    ISP proxies (uncapped source, free bytes), then the per-GB paid proxy
     (720p cost cap), and last the conservative fallback strategy through the
     paid proxy (or a static/direct when no paid proxy is configured).
     ``capped`` marks attempts whose bytes are billed per GB."""
@@ -770,8 +771,9 @@ def download_youtube_video(url, output_dir="."):
         print(f"🌐 {len(_statics)} static ISP proxies configured.")
 
     # Two download strategies, tried in order so a break in the HD path degrades
-    # gracefully instead of failing the whole job: an HD attempt first, then a
-    # conservative fallback (also the only strategy for self-host).
+    # gracefully instead of failing the whole job: an HD attempt first (PO-token
+    # clients), then the same quality selector with conservative player clients
+    # (also the only strategy for self-host without bgutil).
     _bgutil_http = os.environ.get("BGUTIL_BASE_URL", "").strip()
     _bgutil_script = os.environ.get("BGUTIL_SCRIPT_PATH", "").strip()
     if _bgutil_http:
@@ -789,21 +791,23 @@ def download_youtube_video(url, output_dir="."):
 
     # Cap at 720p ONLY when the bytes actually go through the PER-GB paid proxy
     # — that cap exists to control bandwidth cost, and the direct attempt and
-    # the flat-rate static proxies have none.
+    # the flat-rate static proxies have none. Uncapped attempts take the
+    # highest available source (VP9 included, AV1 skipped) unless
+    # DOWNLOAD_SOURCE_HEIGHT pins a ceiling. Fallback uses the same selector;
+    # extractor_args is what differs, not the quality.
     #
     # This is per-attempt on purpose. Deciding it once from `_proxy` capped the
     # DIRECT attempt too, so with DIRECT_FIRST=1 (which serves most downloads)
     # every YouTube source arrived at 720p and, since the reframe inherits the
     # source height, 80% of delivered clips came out 406x720 (audited 25-jul-2026).
-    def _hd_fmt_for(capped):
-        if capped:
-            return ('bestvideo[vcodec^=avc1][height<=720][ext=mp4]+bestaudio[ext=m4a]/'
-                    'bestvideo[vcodec^=avc1][height<=720]+bestaudio/'
-                    'best[height<=720][ext=mp4]/best[height<=720]/best')
-        return ('bestvideo[vcodec^=avc1][height<=1080][ext=mp4]+bestaudio[ext=m4a]/'
-                'bestvideo[vcodec^=avc1][height<=1080]+bestaudio/'
-                'best[height<=1080][ext=mp4]/best[ext=mp4]/best')
-    fallback_fmt = 'best[ext=mp4]/best'
+    _max_h = download_source_height()
+    if _max_h == "max":
+        print("🎯 Source quality: highest available (skip AV1).")
+    else:
+        print(f"🎯 Source quality: up to {_max_h}p (skip AV1).")
+
+    def _fmt_for(capped):
+        return youtube_download_format(capped=capped, max_height=_max_h)
 
     def _base_opts(extractor_args, proxy):
         return {
@@ -864,7 +868,7 @@ def download_youtube_video(url, output_dir="."):
     attempts = [
         (label,
          fallback_args if label == 'fallback' else hd_args,
-         fallback_fmt if label == 'fallback' else _hd_fmt_for(capped),
+         _fmt_for(capped),
          proxy)
         for label, capped, proxy in plan_download_attempts(
             _direct_first, _statics, _proxy, bool(hd_args), youtube=is_youtube_url(url))

@@ -1,9 +1,9 @@
 """Download attempt ordering: cheapest bandwidth first.
 
-Direct (server IP) -> flat-rate static ISP proxies (uncapped 1080p, free
-bytes) -> per-GB paid proxy (720p cost cap) -> conservative fallback. The
-``capped`` flag marks the attempts whose bytes are billed per GB (drives the
-720p format cap and the PROXY_BYTES monthly counter).
+Direct (server IP) -> flat-rate static ISP proxies (uncapped source,
+free bytes) -> per-GB paid proxy (720p cost cap) -> conservative fallback.
+The ``capped`` flag marks the attempts whose bytes are billed per GB (drives
+the 720p format cap and the PROXY_BYTES monthly counter).
 """
 import pytest
 
