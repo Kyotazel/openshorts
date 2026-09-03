@@ -205,7 +205,9 @@ def _headers(api_key):
 def _post_chunk(path, model, api_key, extra):
     with open(path, "rb") as fh:
         files = {"file": (os.path.basename(path), fh, "audio/mpeg")}
-        data = [("model", model), *extra]
+        # dict, not a list of tuples: httpx 0.28 cannot encode
+        # data=[(k, v), ...] together with files (TypeError: tuple found).
+        data = {"model": model, **dict(extra)}
         resp = httpx.post(
             OPENROUTER_STT_URL,
             headers=_headers(api_key),

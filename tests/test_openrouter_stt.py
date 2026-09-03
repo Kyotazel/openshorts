@@ -1,6 +1,7 @@
 """OpenRouter Whisper path: 5-minute chunks, word timestamps, env gate."""
 import json
 
+import httpx
 import pytest
 
 import openrouter_stt as ostt
@@ -63,6 +64,42 @@ class TestTranscriptFromResponse:
                 {"text": "hi", "language": "en", "segments": []},
                 chunk_start=0.0,
             )
+
+
+def _serve_stt(handler, monkeypatch):
+    """Route openrouter_stt's httpx.post through an in-process handler."""
+    transport = httpx.MockTransport(handler)
+
+    def fake_post(*args, **kwargs):
+        with httpx.Client(transport=transport) as client:
+            return client.post(*args, **kwargs)
+
+    monkeypatch.setattr(ostt.httpx, "post", fake_post)
+
+
+class TestPostChunk:
+    def test_multipart_form_does_not_typeerror(self, tmp_path, monkeypatch):
+        """httpx 0.28 cannot encode data=list-of-tuples together with files."""
+        captured = {}
+
+        def handler(request):
+            captured["content_type"] = request.headers.get("content-type", "")
+            captured["body"] = request.read()
+            return httpx.Response(200, json=VERBOSE)
+
+        _serve_stt(handler, monkeypatch)
+        path = tmp_path / "chunk_000.mp3"
+        path.write_bytes(b"fake-mp3-bytes")
+        body = ostt.transcribe_chunk(
+            str(path), "openai/whisper-large-v3-turbo", "sk-test")
+        assert body["words"]
+        assert "multipart/form-data" in captured["content_type"]
+        raw = captured["body"]
+        assert b'name="model"' in raw
+        assert b"openai/whisper-large-v3-turbo" in raw
+        assert b'name="file"' in raw
+        assert b'name="response_format"' in raw
+        assert b"verbose_json" in raw
 
 
 class TestMergeChunks:
