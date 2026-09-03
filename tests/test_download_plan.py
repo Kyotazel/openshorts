@@ -38,8 +38,17 @@ class TestOrdering:
             ('fallback', False, None),
         ]
 
-    def test_no_hd_args_still_has_fallback(self):
-        assert plan(False, [], PAID, False) == [('fallback', True, PAID)]
+    def test_no_hd_args_still_tries_default_clients_then_fallback(self):
+        """Without bgutil, still try yt-dlp's default clients (the working
+        ``yt-dlp --cookies -F`` path) before the conservative SABR fallback."""
+        assert plan(False, [], PAID, False) == [
+            ('HD', False, None),
+            ('fallback', True, PAID),
+        ]
+        assert plan(False, [], None, False) == [
+            ('HD', False, None),
+            ('fallback', False, None),
+        ]
 
     def test_paid_attempts_are_the_only_capped_ones(self):
         got = plan(True, STATICS, PAID, True)

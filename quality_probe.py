@@ -65,6 +65,7 @@ def main() -> int:
             'retries': 2,
             'nocheckcertificate': True,
             'cachedir': False,
+            'remote_components': {'ejs:github'},
         }
         # yt-dlp's default player clients (tv_downgraded/web_safari with
         # cookies, android_vr/web_safari anonymous) are the ones that still

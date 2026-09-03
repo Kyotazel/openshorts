@@ -709,6 +709,12 @@ def plan_download_attempts(direct_first, statics, paid, have_hd, youtube=True):
         for i, s in enumerate(statics):
             plan.append((f'HD-static{i + 1}', False, s))
         plan.append(('HD', bool(paid), paid))
+    else:
+        # No PO-token plugin: still try yt-dlp's default clients first
+        # (web_creator / tv_downgraded — the working ``yt-dlp --cookies -F``
+        # path). The conservative fallback list is SABR-only now and returns
+        # no video formats once cookies are present.
+        plan.append(('HD', False, None))
     plan.append(('fallback', bool(paid),
                  paid if paid else (statics[0] if statics else None)))
     return plan
@@ -771,9 +777,8 @@ def download_youtube_video(url, output_dir="."):
         print(f"🌐 {len(_statics)} static ISP proxies configured.")
 
     # Two download strategies, tried in order so a break in the HD path degrades
-    # gracefully instead of failing the whole job: an HD attempt first (PO-token
-    # clients), then the same quality selector with conservative player clients
-    # (also the only strategy for self-host without bgutil).
+    # gracefully instead of failing the whole job: default yt-dlp clients first
+    # (plus a PO-token plugin when configured), then conservative player clients.
     _bgutil_http = os.environ.get("BGUTIL_BASE_URL", "").strip()
     _bgutil_script = os.environ.get("BGUTIL_SCRIPT_PATH", "").strip()
     if _bgutil_http:
@@ -810,12 +815,15 @@ def download_youtube_video(url, output_dir="."):
         return youtube_download_format(capped=capped, max_height=_max_h)
 
     def _base_opts(extractor_args, proxy):
-        return {
+        # remote_components: YouTube's n-sig challenge needs the EJS solver
+        # (the CLI flag --remote-components ejs:github). Without it, deno is
+        # present but unused and only storyboards are listed.
+        opts = {
             'quiet': False, 'verbose': True, 'no_warnings': False,
             'cookiefile': cookies_path if cookies_path else None,
             'proxy': proxy, 'socket_timeout': 30, 'retries': 10, 'fragment_retries': 10,
             'nocheckcertificate': True, 'cachedir': False,
-            'extractor_args': extractor_args,
+            'remote_components': {'ejs:github'},
             'http_headers': {
                 'User-Agent': (
                     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
@@ -823,6 +831,9 @@ def download_youtube_video(url, output_dir="."):
                 ),
             },
         }
+        if extractor_args:
+            opts['extractor_args'] = extractor_args
+        return opts
 
     # Wire bytes actually pulled through the (paid) proxy, summed across
     # fragments/streams. Reported to app.py via the PROXY_BYTES= line below.
