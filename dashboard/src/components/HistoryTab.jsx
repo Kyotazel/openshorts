@@ -1,11 +1,107 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Loader2, Download, Film, FolderOpen } from 'lucide-react';
+import { Loader2, Download, Film, FolderOpen, Link2 } from 'lucide-react';
 import { apiJson } from '../lib/api';
 
-// The signed-in user's saved video library (stored in R2). Private, signed links.
-// Videos are grouped by project (job); re-openable projects get a "reopen"
-// action that restores the whole job for further editing in the Clip Generator.
-export default function HistoryTab({ onReopenProject }) {
+export default function HistoryTab({ billingEnabled, onReopenProject, onOpenJob }) {
+  if (!billingEnabled) {
+    return <LocalHistoryList onOpenJob={onOpenJob} />;
+  }
+  return <CloudHistoryLibrary onReopenProject={onReopenProject} />;
+}
+
+function fmtCreated(created) {
+  if (!created) return '';
+  const ms = created > 1e12 ? created : created * 1000;
+  const d = new Date(ms);
+  if (Number.isNaN(d.getTime())) return '';
+  return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+}
+
+function LocalHistoryList({ onOpenJob }) {
+  const [jobs, setJobs] = useState(null);
+  const [opening, setOpening] = useState(null);
+  const [error, setError] = useState('');
+  const [openError, setOpenError] = useState('');
+
+  useEffect(() => {
+    apiJson('/api/jobs')
+      .then((d) => setJobs(d.jobs || []))
+      .catch(() => setError('could not load your jobs.'));
+  }, []);
+
+  const handleOpen = async (jobId) => {
+    if (!onOpenJob || opening) return;
+    setOpening(jobId);
+    setOpenError('');
+    try {
+      await onOpenJob(jobId);
+    } catch (e) {
+      setOpenError('could not open this job. it may have been deleted.');
+      setOpening(null);
+    }
+  };
+
+  if (jobs === null && !error) {
+    return <div className="flex justify-center py-20"><Loader2 className="animate-spin text-brass" /></div>;
+  }
+
+  return (
+    <div className="h-full overflow-y-auto p-8 max-w-5xl mx-auto animate-fade">
+      <p className="eyebrow mb-1.5">06 · HISTORY</p>
+      <h1 className="font-display lowercase text-2xl text-ink mb-2">past jobs</h1>
+      <p className="text-muted text-sm mb-8 lowercase">
+        clips stay on this server for 7 days unless you raise JOB_RETENTION_SECONDS.
+        click a row to open it in the clip generator.
+      </p>
+
+      {error && <p className="text-danger text-sm">{error}</p>}
+      {openError && <p className="text-danger text-sm mb-4">{openError}</p>}
+
+      {jobs && jobs.length === 0 && (
+        <div className="text-center py-20 text-muted">
+          <Film size={40} className="mx-auto mb-4 text-muted" />
+          <p className="lowercase">no jobs yet. generate your first short from the clip generator.</p>
+        </div>
+      )}
+
+      <div className="space-y-2">
+        {(jobs || []).map((job) => (
+          <button
+            key={job.job_id}
+            type="button"
+            onClick={() => handleOpen(job.job_id)}
+            disabled={!!opening}
+            className="w-full text-left card card-hover p-4 flex flex-wrap items-center gap-3 disabled:opacity-60"
+          >
+            <div className="min-w-0 flex-1">
+              <p className="text-sm text-ink font-medium truncate" title={job.name}>
+                {job.name || job.job_id.slice(0, 8)}
+              </p>
+              {job.source_url ? (
+                <p className="text-xs text-muted truncate mt-0.5 flex items-center gap-1" title={job.source_url}>
+                  <Link2 size={12} className="shrink-0" />
+                  {job.source_url}
+                </p>
+              ) : null}
+              <p className="readout mt-1">
+                {fmtCreated(job.created)}
+                {job.clips != null ? ` · ${job.clips} clip${job.clips === 1 ? '' : 's'}` : ''}
+                {job.status ? ` · ${job.status}` : ''}
+              </p>
+            </div>
+            <span className="text-micro font-mono uppercase text-brass shrink-0">
+              {opening === job.job_id
+                ? <><Loader2 size={14} className="animate-spin inline" /> opening…</>
+                : 'open'}
+            </span>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function CloudHistoryLibrary({ onReopenProject }) {
   const [videos, setVideos] = useState(null);
   const [projects, setProjects] = useState({});
   const [reopening, setReopening] = useState(null);
@@ -25,7 +121,6 @@ export default function HistoryTab({ onReopenProject }) {
       .catch(() => {});
   }, []);
 
-  // Group videos by job, preserving the newest-first order of /api/history.
   const groups = useMemo(() => {
     const byJob = new Map();
     for (const v of videos || []) {

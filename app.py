@@ -94,23 +94,22 @@ for _stream in (sys.stdout, sys.stderr):
 # self-hosted BYOK app does today (no extra dependencies required).
 BILLING_ENABLED = os.environ.get("BILLING_ENABLED", "").lower() in ("1", "true", "yes")
 
-# Job/file retention (issue #46). Self-host defaults to 24h: the 1h sweep kept
-# deleting finished projects under users who never touched their env, and the
-# OUTPUT_MAX_GB / UPLOADS_MAX_GB caps below already bound the disk. Cloud keeps
-# the tight default because clips are archived to R2 as soon as a job finishes.
+# Job/file retention (issue #46). Self-host keeps clips 7 days so History can
+# reopen them; the 1h cloud sweep is fine because those clips are archived to
+# R2 as soon as a job finishes. OUTPUT_MAX_GB still caps a burst inside the window.
 JOB_RETENTION_SECONDS = int(
-    os.environ.get("JOB_RETENTION_SECONDS", "3600" if BILLING_ENABLED else "86400")
+    os.environ.get("JOB_RETENTION_SECONDS", "3600" if BILLING_ENABLED else "604800")
 )
-# The retained download of a URL job (--keep-original) is the one artifact that
-# is a full copy of someone else's video rather than something we made, so it
-# can be aged out ahead of the clips it produced. Defaults to the job clock,
-# i.e. no change: dropping it earlier costs the clip editor, whose rerender,
-# reframe, scenes and EDL endpoints all read that file and answer 409 once it
-# is gone. Lower it only if you would rather lose in-session re-edits than
-# keep the original around. Uploads are deliberately untouched: that file is
-# the user's own content, which they attested to owning.
+# The retained download of a URL job (--keep-original) is a full copy of someone
+# else's video (often multi-GB 4K). On self-host it ages out after 24h while the
+# clips stay for the week; dropping it earlier costs the clip editor, whose
+# rerender/reframe/EDL endpoints 409 once it is gone. Hosted still follows the
+# job clock. Uploads are untouched: that file is the user's own content.
 SOURCE_RETENTION_SECONDS = int(
-    os.environ.get("SOURCE_RETENTION_SECONDS", str(JOB_RETENTION_SECONDS))
+    os.environ.get(
+        "SOURCE_RETENTION_SECONDS",
+        str(JOB_RETENTION_SECONDS) if BILLING_ENABLED else "86400",
+    )
 )
 # Force full pipeline logs to the client even under billing (local debugging).
 DEBUG_LOGS = os.environ.get("DEBUG_LOGS", "").lower() in ("1", "true", "yes")
@@ -1143,14 +1142,61 @@ _proxy_month = {"month": None, "bytes": 0, "alerted": False}
 PROXY_ALERT_GB = 100
 
 
+_SOURCE_URL_FILE = ".source_url"
+_SOURCE_VIDEO_EXTS = {".mp4", ".webm", ".mkv", ".mov"}
+
+
+def persist_job_source_url(job_dir, url):
+    """Write the pasted URL into the job dir so History survives a restart."""
+    if not url or not str(url).strip():
+        return
+    try:
+        os.makedirs(job_dir, exist_ok=True)
+        with open(os.path.join(job_dir, _SOURCE_URL_FILE), "w") as f:
+            f.write(str(url).strip() + "\n")
+    except Exception as e:
+        print(f"⚠️ Could not persist source URL: {e}")
+
+
 def _job_source_url(job) -> Optional[str]:
-    """The ``-u`` argument of the job's main.py command, if it was a URL job."""
-    cmd = list((job or {}).get('cmd') or [])
-    for flag in ('-u', '--url'):
-        if flag in cmd:
-            i = cmd.index(flag)
-            return cmd[i + 1] if i + 1 < len(cmd) else None
+    """The URL argument of the job's main.py command, if it was a URL job.
+
+    ``cmd`` is ``[python, -u, main.py, -u, <url>, ...]`` — the first ``-u`` is
+    CPython unbuffered, not the video.
+    """
+    cmd = list((job or {}).get("cmd") or [])
+    if "--url" in cmd:
+        i = cmd.index("--url")
+        val = cmd[i + 1] if i + 1 < len(cmd) else None
+        return val if val and not str(val).startswith("-") else None
+    try:
+        script = cmd.index("main.py")
+    except ValueError:
+        script = -1
+    for i in range(script + 1, len(cmd) - 1):
+        if cmd[i] in ("-u", "--url"):
+            val = cmd[i + 1]
+            if val and not str(val).startswith("-"):
+                return val
     return None
+
+
+def listed_source_url(job_id, rec=None, meta=None):
+    """Resolve a job's pasted URL: cmd, then metadata, then ``.source_url``."""
+    from_cmd = _job_source_url(rec)
+    if from_cmd:
+        return from_cmd
+    if isinstance(meta, dict):
+        raw = meta.get("source_url")
+        if isinstance(raw, str) and raw.strip():
+            return raw.strip()
+    path = os.path.join(OUTPUT_DIR, job_id, _SOURCE_URL_FILE)
+    try:
+        with open(path, encoding="utf-8") as f:
+            raw = f.read().strip()
+        return raw or None
+    except OSError:
+        return None
 
 
 async def _track_proxy_usage(job_id):
@@ -2351,6 +2397,8 @@ async def process_endpoint(
     job_id = str(uuid.uuid4())
     job_output_dir = os.path.join(OUTPUT_DIR, job_id)
     os.makedirs(job_output_dir, exist_ok=True)
+    if url:
+        persist_job_source_url(job_output_dir, url)
 
     # Prepare Command
     # sys.executable, not "python": bare "python" resolves against PATH, which
@@ -2625,7 +2673,12 @@ def _job_display_name(rec):
     for k in ("name", "title", "source_video", "video_title"):
         v = rec.get(k)
         if isinstance(v, str) and v.strip():
-            return os.path.basename(v.strip())
+            name = os.path.basename(v.strip())
+            if k == "source_video":
+                stem, ext = os.path.splitext(name)
+                if ext.lower() in _SOURCE_VIDEO_EXTS:
+                    name = stem
+            return name
     clips = (rec.get("result") or {}).get("clips")
     if clips and isinstance(clips, list):
         t = (clips[0] or {}).get("title")
@@ -2672,6 +2725,7 @@ async def list_jobs(request: Request):
             "created": created,
             "name": _job_display_name(rec) or job_id[:8],
             "clips": len(clips),
+            "source_url": listed_source_url(job_id, rec=rec),
         })
 
     if os.path.isdir(OUTPUT_DIR):
@@ -2693,6 +2747,7 @@ async def list_jobs(request: Request):
                 "created": os.path.getmtime(metas[0]),
                 "name": _job_display_name(meta) or entry[:8],
                 "clips": len(meta.get("shorts") or []),
+                "source_url": listed_source_url(entry, rec=None, meta=meta),
             })
 
     items.sort(key=lambda x: (x.get("created") or 0), reverse=True)

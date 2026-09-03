@@ -26,6 +26,7 @@ import ProfileMenu from './components/ProfileMenu';
 import Modal from './components/ui/Modal';
 import { useAuth } from './contexts/AuthContext';
 import { apiFetch, apiJson, QuotaError } from './lib/api';
+import { historyNavVisible } from './lib/historyNav';
 import { track } from './lib/analytics';
 
 // Enhanced "Encryption" using XOR + Base64 with a Salt
@@ -186,9 +187,10 @@ const UserProfileSelector = ({ profiles, selectedUserId, onSelect, onConnect }) 
 };
 
 const SESSION_KEY = 'openshorts_session';
-// Matches the self-host JOB_RETENTION_SECONDS default. A restore whose job was
-// already purged server-side fails gracefully and clears the saved session.
-const SESSION_MAX_AGE = 86400000; // 24 hours
+// Matches the self-host JOB_RETENTION_SECONDS default (7 days). A restore
+// whose job was already purged server-side fails gracefully and clears the
+// saved session.
+const SESSION_MAX_AGE = 7 * 86400000;
 
 // Mock polling function
 const pollJob = async (jobId) => {
@@ -425,6 +427,28 @@ function App() {
     handleClipStateChange(index, { activeLayers: null, serverVideoFile: newFile });
   };
 
+  // Load a job the server still has on disk into the Clip Generator. Shared
+  // by History (self-host) and the "newest job" recovery on a fresh tab.
+  const applyJobSnapshot = (id, data) => {
+    setJobId(id);
+    setResults(data.result || null);
+    setProcessingMedia({ type: 'server', payload: `/api/source/${id}` });
+    setNoSource(false);
+    setQualityGate(null);
+    setProjectState(null);
+    if (data.status === 'completed' || data.status === 'complete') setStatus('complete');
+    else if (data.status === 'failed' || data.status === 'error') setStatus('error');
+    else setStatus('processing');
+    setLogs(Array.isArray(data.logs) ? data.logs : []);
+    setActiveTab('dashboard');
+  };
+
+  const openLocalJob = async (id) => {
+    flushClipState();
+    const data = await apiJson(`/api/status/${id}`);
+    applyJobSnapshot(id, data);
+  };
+
   // Reopen an archived project from the History tab: the backend re-downloads
   // its files from R2 into the server's working dir and returns the full state.
   const restoreProject = async (projectJobId) => {
@@ -585,14 +609,7 @@ function App() {
         if (top.job_id === jobIdRef.current) return;
         const data = await apiJson(`/api/status/${top.job_id}`);
         if (cancelled) return;
-        setJobId(top.job_id);
-        setResults(data.result || null);
-        setProcessingMedia({ type: 'server', payload: `/api/source/${top.job_id}` });
-        setNoSource(false);
-        if (data.status === 'completed' || data.status === 'complete') setStatus('complete');
-        else if (data.status === 'failed' || data.status === 'error') setStatus('error');
-        else setStatus('processing');
-        setActiveTab('dashboard');
+        applyJobSnapshot(top.job_id, data);
       } catch (e) {
         console.warn('Server job recovery skipped:', e);
       }
@@ -993,7 +1010,7 @@ function App() {
     { id: 'ai-agent', ord: '03', icon: Bot, label: 'AI Agent', short: 'agent', byok: true },
     { id: 'ugc-gallery', ord: '04', icon: LayoutGrid, label: 'UGC Gallery', short: 'gallery', primary: true },
     { id: 'thumbnails', ord: '05', icon: Image, label: 'YouTube Studio', short: 'studio', primary: true },
-    ...(billingEnabled && isSignedIn ? [{ id: 'history', ord: '06', icon: History, label: 'History', short: 'history' }] : []),
+    ...(historyNavVisible(billingEnabled, isSignedIn) ? [{ id: 'history', ord: '06', icon: History, label: 'History', short: 'history' }] : []),
     { id: 'settings', ord: '07', icon: Settings, label: 'Settings', short: 'settings' },
   ];
   const activeNav = navItems.find((n) => n.id === activeTab);
@@ -1708,7 +1725,11 @@ function App() {
           {activeTab === 'history' && (
             <div className="h-full overflow-y-auto custom-scrollbar animate-fade">
               <div className="max-w-6xl mx-auto p-4 sm:p-6 md:p-8">
-                <HistoryTab onReopenProject={restoreProject} />
+                <HistoryTab
+                  billingEnabled={billingEnabled}
+                  onReopenProject={restoreProject}
+                  onOpenJob={openLocalJob}
+                />
               </div>
             </div>
           )}
