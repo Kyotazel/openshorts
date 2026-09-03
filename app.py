@@ -247,7 +247,7 @@ def _check_probe_rate(user_id):
     times.append(now)
 
 
-async def reserve_process_minutes(request, url, input_path, job_id):
+async def reserve_process_minutes(request, url, input_path, job_id, slice_seconds=None):
     """Meter a managed /api/process request.
 
     Returns (user_id, priority, reservation_id, plan).
@@ -300,7 +300,9 @@ async def reserve_process_minutes(request, url, input_path, job_id):
     # Probe input duration (blocking → run in a thread).
     loop = asyncio.get_event_loop()
     try:
-        if url:
+        if slice_seconds is not None:
+            minutes = max(1, math.ceil(float(slice_seconds) / 60.0))
+        elif url:
             minutes = await loop.run_in_executor(None, _metering.probe_url_minutes, url)
         else:
             minutes = await loop.run_in_executor(None, _metering.probe_file_minutes, input_path)
@@ -2039,6 +2041,156 @@ async def ad_library_delete(item_id: str):
     except KeyError:
         raise HTTPException(status_code=404, detail="Not found")
 
+
+def _ad_insert_files(job_id, clip_index, input_filename):
+    """Resolve job metadata + the served video path for on-demand ad insert."""
+    output_dir = os.path.join(OUTPUT_DIR, job_id)
+    json_files = glob.glob(os.path.join(output_dir, "*_metadata.json"))
+    if not json_files:
+        raise HTTPException(status_code=404, detail="Metadata not found")
+    with open(json_files[0], encoding="utf-8") as f:
+        data = json.load(f)
+    clips = data.get("shorts") or []
+    if clip_index < 0 or clip_index >= len(clips):
+        raise HTTPException(status_code=404, detail="Clip not found")
+    clip = clips[clip_index]
+    if input_filename:
+        filename = os.path.basename(input_filename)
+    else:
+        filename = (clip.get("video_url") or "").split("/")[-1]
+        if not filename:
+            base_name = os.path.basename(json_files[0]).replace("_metadata.json", "")
+            filename = f"{base_name}_clip_{clip_index + 1}.mp4"
+    path = os.path.join(output_dir, filename)
+    if not os.path.exists(path):
+        raise HTTPException(status_code=404, detail=f"Video file not found: {filename}")
+    return output_dir, json_files[0], data, clips, clip, filename, path
+
+
+def _ad_insert_plan_body(job_id, clip_index, input_filename):
+    import ad_insert as _adins
+    import ad_library as _ads
+    output_dir, meta_path, data, clips, clip, filename, path = _ad_insert_files(
+        job_id, clip_index, input_filename)
+    ad_path = _ads.active_path()
+    if not ad_path:
+        raise HTTPException(status_code=400, detail="No active ad clip in the library")
+    ad_dur = _ads.probe_duration(ad_path) or 3.0
+    if ad_dur > 5.0:
+        ad_dur = 5.0
+    clip_dur = _media_duration_seconds(path) or (float(clip.get("end") or 0) - float(clip.get("start") or 0))
+    hook_end = 3.0 if ("hooked_" in filename or clip.get("auto_hook")) else 0.0
+    words = _adins.words_in_clip(data.get("transcript"), float(clip.get("start") or 0),
+                                 float(clip.get("end") or 0))
+    window = _adins.pick_ad_window(clip_dur, ad_dur, words, hook_end=hook_end)
+    valid_start = hook_end + 0.3
+    valid_end = clip_dur - ad_dur - 0.4
+    man = _ads.read_manifest()
+    item = next((it for it in man.get("items") or [] if it.get("id") == man.get("active_id")), None)
+    return {
+        "start": None if not window else window[0],
+        "end": None if not window else window[1],
+        "valid_start": valid_start,
+        "valid_end": valid_end,
+        "ad_duration": ad_dur,
+        "clip_duration": clip_dur,
+        "source_name": (item or {}).get("original_name") or os.path.basename(ad_path),
+        "ad_insert": clip.get("ad_insert"),
+        "filename": filename,
+        "_ctx": (output_dir, meta_path, data, clips, clip, filename, path, ad_path, ad_dur, hook_end, words, clip_dur),
+    }
+
+
+@app.get("/api/ad-insert/plan")
+async def ad_insert_plan(job_id: str, clip_index: int, input_filename: Optional[str] = None):
+    _ad_library_guard()
+    body = _ad_insert_plan_body(job_id, clip_index, input_filename)
+    body.pop("_ctx", None)
+    return body
+
+
+class AdInsertRequest(BaseModel):
+    job_id: str
+    clip_index: int
+    input_filename: Optional[str] = None
+    start: Optional[float] = None
+    remove: Optional[bool] = False
+
+
+@app.post("/api/ad-insert")
+async def ad_insert_apply(req: AdInsertRequest, request: Request):
+    _ad_library_guard()
+    await _ensure_job_files(req.job_id, request)
+    import ad_insert as _adins
+    import ad_library as _ads
+
+    output_dir, meta_path, data, clips, clip, filename, path = _ad_insert_files(
+        req.job_id, req.clip_index, req.input_filename)
+
+    if req.remove:
+        parent = _adins.strip_adins_name(output_dir, filename)
+        clip.pop("ad_insert", None)
+        clips[req.clip_index] = clip
+        data["shorts"] = clips
+        with open(meta_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+        if req.job_id in jobs and jobs[req.job_id].get("result"):
+            mem = jobs[req.job_id]["result"].get("clips") or []
+            if req.clip_index < len(mem):
+                mem[req.clip_index]["video_url"] = f"/videos/{req.job_id}/{parent}"
+                mem[req.clip_index].pop("ad_insert", None)
+        return {"new_video_url": f"/videos/{req.job_id}/{parent}", "ad_insert": None}
+
+    plan = _ad_insert_plan_body(req.job_id, req.clip_index, req.input_filename)
+    ctx = plan.pop("_ctx")
+    output_dir, meta_path, data, clips, clip, filename, path, ad_path, ad_dur, hook_end, words, clip_dur = ctx
+    parent_name = _adins.strip_adins_name(output_dir, filename)
+    parent_path = os.path.join(output_dir, parent_name)
+    if plan["valid_end"] <= plan["valid_start"]:
+        raise HTTPException(status_code=400, detail="Clip is too short for this ad")
+    if req.start is None:
+        window = _adins.pick_ad_window(clip_dur, ad_dur, words, hook_end=hook_end)
+        if not window:
+            raise HTTPException(status_code=400, detail="Clip is too short for this ad")
+        start = window[0]
+    else:
+        start = float(req.start)
+        start = min(max(start, plan["valid_start"]), plan["valid_end"])
+        if plan["valid_end"] < plan["valid_start"]:
+            raise HTTPException(status_code=400, detail="Clip is too short for this ad")
+    try:
+        out_path = await asyncio.get_event_loop().run_in_executor(
+            None, lambda: _adins.burn_ad_derived(parent_path, ad_path, start, ad_dur))
+    except Exception as e:
+        tail = ""
+        err = getattr(e, "stderr", None)
+        if err:
+            tail = " " + (err.decode(errors="replace") if isinstance(err, bytes) else str(err))[-400:]
+        raise HTTPException(status_code=500, detail=f"Ad overlay failed: {e}{tail}") from e
+    out_name = os.path.basename(out_path)
+    man = _ads.read_manifest()
+    aid = os.path.splitext(os.path.basename(ad_path))[0]
+    item = next((it for it in man.get("items") or [] if it.get("id") == aid), None)
+    meta = {
+        "start": start,
+        "end": start + ad_dur,
+        "source_id": (item or {}).get("id") or aid,
+        "source_name": (item or {}).get("original_name") or os.path.basename(ad_path),
+    }
+    clip["ad_insert"] = meta
+    clip["video_url"] = f"/videos/{req.job_id}/{out_name}"
+    clips[req.clip_index] = clip
+    data["shorts"] = clips
+    with open(meta_path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+    if req.job_id in jobs and jobs[req.job_id].get("result"):
+        mem = jobs[req.job_id]["result"].get("clips") or []
+        if req.clip_index < len(mem):
+            mem[req.clip_index]["video_url"] = clip["video_url"]
+            mem[req.clip_index]["ad_insert"] = meta
+    return {"new_video_url": clip["video_url"], "ad_insert": meta}
+
+
 async def _probe_youtube_quality(url: str) -> dict:
     """Run quality_probe.py in a worker thread; {} on any failure (fail-open)."""
     def _run():
@@ -2274,6 +2426,8 @@ async def process_endpoint(
     captions: Optional[str] = Form(None),
     upload_id: Optional[str] = Form(None),
     insert_ad: Optional[str] = Form(None),
+    source_start: Optional[str] = Form(None),
+    source_end: Optional[str] = Form(None),
 ):
     api_key = await resolve_gemini(request)
     if not api_key and not (llm_backend.active() and not BILLING_ENABLED):
@@ -2306,6 +2460,17 @@ async def process_endpoint(
         captions = body.get("captions")
         upload_id = body.get("upload_id")
         insert_ad = body.get("insert_ad")
+        source_start = body.get("source_start")
+        source_end = body.get("source_end")
+
+    import source_trim as _strim
+    try:
+        source_start, source_end = _strim.parse_pair(source_start, source_end)
+    except (TypeError, ValueError) as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+    if source_start is not None and not url:
+        raise HTTPException(status_code=400, detail="source_start/source_end are only valid with a URL")
 
     # Normalize output format (auto = keep pipeline default).
     if output_format not in ("vertical", "horizontal", "square"):
@@ -2359,13 +2524,23 @@ async def process_endpoint(
     # 20 min on a 360p-only source. Fail-open: any probe error starts normally.
     # The probe also runs under force_low_quality so the short-source check
     # can't be bypassed through the quality-gate confirm.
-    if url and (QUALITY_GATE_MIN_HEIGHT > 0 or MIN_SOURCE_SECONDS > 0):
+    if url and (QUALITY_GATE_MIN_HEIGHT > 0 or MIN_SOURCE_SECONDS > 0
+                or source_start is not None):
         probe = await _probe_youtube_quality(url)
         # Hard reject, no confirm-and-retry: a too-short source fails the same
         # way on every retry, so letting the user force it just burns the job.
         source_duration = int(probe.get("duration") or 0)
         if MIN_SOURCE_SECONDS > 0 and 0 < source_duration < MIN_SOURCE_SECONDS:
             _reject_short_source(source_duration)
+        if source_start is not None:
+            import source_trim as _strim
+            try:
+                _strim.validate_window(
+                    source_start, source_end,
+                    duration=source_duration or None,
+                    min_seconds=MIN_SOURCE_SECONDS)
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e)) from e
         max_height = int(probe.get("max_height") or 0)
         if not force_low and QUALITY_GATE_MIN_HEIGHT > 0 \
                 and 0 < max_height < QUALITY_GATE_MIN_HEIGHT:
@@ -2496,6 +2671,9 @@ async def process_endpoint(
         # re-render path cuts new segments from it, and it ages out with the
         # rest of the job (retention window + OUTPUT_MAX_GB cap) either way.
         cmd.extend(["-u", url, "--keep-original"])
+        if source_start is not None:
+            cmd.extend(["--source-start", str(source_start),
+                        "--source-end", str(source_end)])
     elif thumb_session:
         # Hardlink (or copy) the session's video under the job's name so source
         # lookup, the clip editor and the preview treat it exactly like a normal
@@ -2565,7 +2743,9 @@ async def process_endpoint(
     print(f"[attestation] job={job_id} ip={attestation['ip']} source={attestation['source']} ack=true")
 
     # Meter + reserve minutes for managed users (no-op for BYOK / self-host).
-    user_id, priority, reservation_id, user_plan = await reserve_process_minutes(request, url, input_path, job_id)
+    slice_seconds = (source_end - source_start) if source_start is not None else None
+    user_id, priority, reservation_id, user_plan = await reserve_process_minutes(
+        request, url, input_path, job_id, slice_seconds=slice_seconds)
     if user_plan == "free":
         # Free-plan clips carry a burned-in watermark (applied by the main.py
         # subprocess after each clip renders).

@@ -1828,6 +1828,10 @@ if __name__ == '__main__':
                         help="Output aspect: vertical/auto (9:16), horizontal (keep 16:9), square (1:1).")
     parser.add_argument('--transcript', type=str,
                         help="Path to a precomputed transcript JSON (transcribe_media shape); skips transcription.")
+    parser.add_argument('--source-start', type=float, default=None,
+                        help="Clip the downloaded URL from this timestamp (seconds). Requires --source-end.")
+    parser.add_argument('--source-end', type=float, default=None,
+                        help="Clip the downloaded URL until this timestamp (seconds). Requires --source-start.")
 
     args = parser.parse_args()
     output_format = args.format
@@ -1856,6 +1860,18 @@ if __name__ == '__main__':
                 output_dir = "."
         
         input_video, video_title = download_youtube_video(args.url, output_dir)
+        if (args.source_start is None) ^ (args.source_end is None):
+            print("❌ Both --source-start and --source-end are required.", flush=True)
+            exit(1)
+        if args.source_start is not None:
+            import source_trim as _trim
+            print(f"✂️  trimming source {_trim.format_clock(args.source_start)}"
+                  f"–{_trim.format_clock(args.source_end)}", flush=True)
+            try:
+                _trim.trim_source(input_video, args.source_start, args.source_end)
+            except Exception as e:
+                print(f"❌ Source trim failed: {e}", flush=True)
+                exit(1)
     else:
         input_video = args.input
         video_title = os.path.splitext(os.path.basename(input_video))[0]

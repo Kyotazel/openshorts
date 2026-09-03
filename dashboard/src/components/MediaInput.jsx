@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Link2, Upload, FileVideo, X, Info, Loader2, ChevronDown } from 'lucide-react';
 import { getApiUrl } from '../config';
+import { parseClock, parseYoutubeT } from '../lib/sourceWindow';
 
 const SUPPORTED_PLATFORMS = [
     'YouTube', 'Vimeo', 'TikTok', 'X / Twitter', 'Twitch',
@@ -12,6 +13,9 @@ export default function MediaInput({ onProcess, isProcessing }) {
     // File upload is the primary path; the link is secondary.
     const [mode, setMode] = useState('file'); // 'file' | 'url'
     const [url, setUrl] = useState('');
+    const [sourceStart, setSourceStart] = useState('');
+    const [sourceEnd, setSourceEnd] = useState('');
+    const [sourceWindowError, setSourceWindowError] = useState('');
     const [file, setFile] = useState(null);
     const [acknowledged, setAcknowledged] = useState(false);
     const [outputFormat, setOutputFormat] = useState('vertical'); // vertical | horizontal | square
@@ -109,6 +113,12 @@ export default function MediaInput({ onProcess, isProcessing }) {
         }
     }, []);
 
+    useEffect(() => {
+        const t = parseYoutubeT(url);
+        if (t == null) return;
+        setSourceStart((prev) => prev || String(t));
+    }, [url]);
+
     const handleSubmit = (e) => {
         e.preventDefault();
         if (!acknowledged) return;
@@ -121,6 +131,24 @@ export default function MediaInput({ onProcess, isProcessing }) {
             layout,
             insertAd,
         };
+        if (mode === 'url') {
+            const a = sourceStart.trim();
+            const b = sourceEnd.trim();
+            if (a || b) {
+                try {
+                    if (!a || !b) throw new Error('Isi start dan end');
+                    const startSec = parseClock(a);
+                    const endSec = parseClock(b);
+                    if (endSec <= startSec) throw new Error('End harus setelah start');
+                    advanced.sourceStart = startSec;
+                    advanced.sourceEnd = endSec;
+                    setSourceWindowError('');
+                } catch (err) {
+                    setSourceWindowError(err.message || 'Waktu tidak valid');
+                    return;
+                }
+            }
+        }
         try {
             localStorage.setItem('os_auto_hook', autoHook ? '1' : '0');
             localStorage.setItem('os_auto_hook_style', autoHookStyle);
@@ -207,6 +235,36 @@ export default function MediaInput({ onProcess, isProcessing }) {
                                 )}
                             </div>
                         </div>
+                        <div className="grid grid-cols-2 gap-2">
+                            <label className="block">
+                                <span className="eyebrow">start</span>
+                                <input
+                                    type="text"
+                                    inputMode="numeric"
+                                    value={sourceStart}
+                                    onChange={(e) => { setSourceStart(e.target.value); setSourceWindowError(''); }}
+                                    placeholder="12:45"
+                                    className="input-field mt-1"
+                                />
+                            </label>
+                            <label className="block">
+                                <span className="eyebrow">end</span>
+                                <input
+                                    type="text"
+                                    inputMode="numeric"
+                                    value={sourceEnd}
+                                    onChange={(e) => { setSourceEnd(e.target.value); setSourceWindowError(''); }}
+                                    placeholder="20:21"
+                                    className="input-field mt-1"
+                                />
+                            </label>
+                        </div>
+                        {sourceWindowError && (
+                            <p className="text-[11px] text-danger">{sourceWindowError}</p>
+                        )}
+                        <p className="text-[11px] text-muted leading-relaxed">
+                            Opsional. Potong sumber ke jendela ini sebelum transkrip. Isi keduanya, atau kosongkan.
+                        </p>
                     </div>
                 ) : (
                     <div

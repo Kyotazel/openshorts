@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { Download, Share2, Instagram, Youtube, Video, AlertCircle, Loader2, Copy, Check, Wand2, Type, Calendar, Languages, FileText, Link2, Scissors, Crosshair, TrendingUp } from 'lucide-react';
+import { Download, Share2, Instagram, Youtube, Video, AlertCircle, Loader2, Copy, Check, Wand2, Type, Calendar, Languages, FileText, Link2, Scissors, Crosshair, TrendingUp, Megaphone } from 'lucide-react';
 import { getApiUrl } from '../config';
 import { apiFetch } from '../lib/api';
 import SubtitleModal from './SubtitleModal';
 import HookModal from './HookModal';
 import TranslateModal from './TranslateModal';
+import AdInsertModal from './AdInsertModal';
 import Modal from './ui/Modal';
 import SegmentedControl from './ui/SegmentedControl';
 import WatermarkModal, { watermarkNoticeDismissed } from './WatermarkModal';
@@ -199,6 +200,11 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
     const [isTranslating, setIsTranslating] = useState(false);
     const [showHookModal, setShowHookModal] = useState(false);
     const [showTranslateModal, setShowTranslateModal] = useState(false);
+    const [showAdModal, setShowAdModal] = useState(false);
+    const [adLibraryOk, setAdLibraryOk] = useState(false);
+    const [isAdInserting, setIsAdInserting] = useState(false);
+    const [adPlan, setAdPlan] = useState(null);
+    const [adStart, setAdStart] = useState(0);
     const [editError, setEditError] = useState(null);
 
     const [clipDuration, setClipDuration] = useState(() => {
@@ -229,6 +235,25 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
     // one). /api/hook REPLACES it; tracked locally so the modal stays honest
     // after edits without refetching the job.
     const [burnedHook, setBurnedHook] = useState(clip.auto_hook?.text || null);
+
+    useEffect(() => {
+        let cancelled = false;
+        fetch(getApiUrl('/api/config'))
+            .then((r) => r.ok ? r.json() : null)
+            .then((cfg) => {
+                if (cancelled) return;
+                if (cfg && (cfg.adLibrary === false || cfg.billingEnabled)) {
+                    setAdLibraryOk(false);
+                    return;
+                }
+                return fetch(getApiUrl('/api/ad-library')).then((r) => {
+                    if (cancelled) return;
+                    setAdLibraryOk(r.ok && r.status !== 404);
+                });
+            })
+            .catch(() => {});
+        return () => { cancelled = true; };
+    }, []);
 
     // Fetch clip duration from transcript endpoint
     useEffect(() => {
@@ -580,6 +605,87 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
         }
     };
 
+    const openAdModal = async () => {
+        setShowAdModal(true);
+        try {
+            const q = new URLSearchParams({
+                job_id: jobId,
+                clip_index: String(index),
+            });
+            if (serverVideoFile) q.set('input_filename', serverVideoFile);
+            const r = await apiFetch(`/api/ad-insert/plan?${q}`);
+            const body = await r.json().catch(() => ({}));
+            if (!r.ok) {
+                setAdPlan({ error: body.detail || 'Tidak bisa merencanakan iklan' });
+                return;
+            }
+            setAdPlan(body);
+            setAdStart(body.start ?? body.valid_start ?? 0);
+        } catch (e) {
+            setAdPlan({ error: e.message });
+        }
+    };
+
+    const handleAdGenerate = async (start) => {
+        setIsAdInserting(true);
+        setEditError(null);
+        try {
+            const res = await apiFetch('/api/ad-insert', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    job_id: jobId,
+                    clip_index: index,
+                    input_filename: serverVideoFile,
+                    start,
+                }),
+            });
+            if (!res.ok) throw new Error(await res.text());
+            const data = await res.json();
+            if (data.new_video_url) {
+                setCurrentVideoUrl(getApiUrl(data.new_video_url));
+                setServerVideoFile(data.new_video_url.split('/').pop());
+                if (videoRef.current) videoRef.current.load();
+                setShowAdModal(false);
+            }
+        } catch (e) {
+            setEditError(e.message);
+            setTimeout(() => setEditError(null), 5000);
+        } finally {
+            setIsAdInserting(false);
+        }
+    };
+
+    const handleAdRemove = async () => {
+        setIsAdInserting(true);
+        setEditError(null);
+        try {
+            const res = await apiFetch('/api/ad-insert', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    job_id: jobId,
+                    clip_index: index,
+                    input_filename: serverVideoFile,
+                    remove: true,
+                }),
+            });
+            if (!res.ok) throw new Error(await res.text());
+            const data = await res.json();
+            if (data.new_video_url) {
+                setCurrentVideoUrl(getApiUrl(data.new_video_url));
+                setServerVideoFile(data.new_video_url.split('/').pop());
+                if (videoRef.current) videoRef.current.load();
+                setShowAdModal(false);
+            }
+        } catch (e) {
+            setEditError(e.message);
+            setTimeout(() => setEditError(null), 5000);
+        } finally {
+            setIsAdInserting(false);
+        }
+    };
+
     const handleTranslate = async (options) => {
         console.log('[Translate] Starting translation with options:', options);
         setIsTranslating(true);
@@ -928,6 +1034,17 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
                         {isTranslating ? 'translating…' : 'dub voice'}
                     </button>
 
+                    {adLibraryOk && (
+                        <button
+                            onClick={openAdModal}
+                            disabled={isAdInserting}
+                            className={QUIET_BTN}
+                        >
+                            {isAdInserting ? <Loader2 size={16} className="animate-spin text-brass shrink-0" /> : <Megaphone size={16} className="text-muted group-hover:text-brass transition-colors shrink-0" />}
+                            {isAdInserting ? 'adding…' : 'add ads'}
+                        </button>
+                    )}
+
                     <button
                         onClick={() => setShowModal(true)}
                         className="btn-primary flex-col gap-1 py-2.5 sm:py-2 px-1 text-[11px] leading-none rounded-input whitespace-nowrap"
@@ -1145,6 +1262,17 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
                 serverRender={hasServerBurns}
                 burnedHook={burnedHook}
                 onRemove={burnedHook ? handleRemoveHook : null}
+            />
+
+            <AdInsertModal
+                isOpen={showAdModal}
+                onClose={() => setShowAdModal(false)}
+                onGenerate={handleAdGenerate}
+                onRemove={adPlan?.ad_insert ? handleAdRemove : null}
+                isProcessing={isAdInserting}
+                plan={adPlan}
+                start={adStart}
+                onStartChange={setAdStart}
             />
 
             <TranslateModal
