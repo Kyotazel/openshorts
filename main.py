@@ -819,8 +819,17 @@ def download_youtube_video(url, output_dir="."):
         # remote_components: YouTube's n-sig challenge needs the EJS solver
         # (the CLI flag --remote-components ejs:github). Without it, deno is
         # present but unused and only storyboards are listed.
+        # quiet + noprogress: yt-dlp's own prints use its MultilinePrinter,
+        # which ignores quiet for progress (BreaklineStatusPrinter adds plain
+        # \n rows; the \r fallback blobs up in our line-buffered pipe and, on
+        # flush, flooded the log with [download]/[Merger]/ffmpeg-command rows
+        # and googlevideo URLs). Only noprogress=True gives it the silent
+        # QuietMultilinePrinter. Progress now comes solely from our own
+        # _progress_hook rows below: one line per whole percent,
+        # newline-flushed, plus a closing summary.
         opts = {
-            'quiet': False, 'verbose': True, 'no_warnings': False,
+            'quiet': True, 'verbose': False, 'no_warnings': True,
+            'noprogress': True,
             'cookiefile': cookies_path if cookies_path else None,
             'proxy': proxy, 'socket_timeout': 30, 'retries': 10, 'fragment_retries': 10,
             'nocheckcertificate': True, 'cachedir': False,
@@ -839,17 +848,24 @@ def download_youtube_video(url, output_dir="."):
     # Wire bytes actually pulled through the (paid) proxy, summed across
     # fragments/streams. Reported to app.py via the PROXY_BYTES= line below.
     _dl_bytes = {"total": 0, "partial": 0}
+    import download_progress as _dl_progress
+    _dl_reporter = _dl_progress.DownloadProgress(
+        emit=lambda line: print(line, flush=True))
 
     def _progress_hook(d):
         if d.get('status') == 'downloading':
             # Bytes of a fragment still in flight: a failed attempt has
             # already paid for these even though 'finished' never fires.
             _dl_bytes["partial"] = int(d.get('downloaded_bytes') or 0)
+            # User-visible realtime line (newline-flushed, throttled inside
+            # the reporter so the 2s log poll sees steady updates).
+            _dl_reporter.update(d)
         elif d.get('status') == 'finished':
             _dl_bytes["partial"] = 0
             _dl_bytes["total"] += int(d.get('total_bytes')
                                       or d.get('total_bytes_estimate')
                                       or d.get('downloaded_bytes') or 0)
+            _dl_reporter.finished(d)
 
     def _attempt(extractor_args, fmt, proxy):
         _dl_bytes["total"] = 0
@@ -963,7 +979,14 @@ Technical Details: {str(last_err)}
         # Machine-parseable marker consumed by app.py's log reader for the
         # monthly proxy-bandwidth counter. Not shown to clients (log filter).
         print(f"PROXY_BYTES={paid_bytes}")
-    print(f"✅ Video downloaded in {time.time() - step_start_time:.2f}s: {downloaded_file}")
+    # Closing summary for the percent rows above: total size + wall time.
+    # The raw file path stays out so cloud log filters keep no local paths.
+    try:
+        _done_size = os.path.getsize(downloaded_file)
+    except OSError:
+        _done_size = 0
+    print(_dl_progress.format_done(
+        _done_size, time.time() - step_start_time), flush=True)
     return downloaded_file, sanitized_title
 
 def finalize_clip_passthrough(input_video, final_output_video):
@@ -1481,7 +1504,40 @@ def transcribe_video(video_path):
 
     return transcript
 
-def _run_gemini_stage(client, model_name, prompt, schema):
+def _llm_attempt_line(label, attempt, max_attempts):
+    """One row when an LLM pass attempt starts (score/detail + n/m)."""
+    return f"🤖 {label.capitalize()} pass (attempt {attempt}/{max_attempts})…"
+
+
+def _llm_waiting_line(label, elapsed_seconds):
+    """Heartbeat row while the blocking model call runs."""
+    return (f"🤖 {label.capitalize()} pass still waiting for the model… "
+            f"({elapsed_seconds:.0f}s)")
+
+
+def _start_llm_heartbeat(label, emit=print, stop=None, interval=20.0,
+                         now=time.monotonic):
+    """Print a waiting row every ``interval`` until ``stop`` is set.
+
+    The model call blocks, so the heartbeat runs on a daemon thread and
+    the caller sets ``stop`` in a finally. Returns the thread.
+    """
+    stop = stop if stop is not None else threading.Event()
+    start = now()
+
+    def _beat():
+        while not stop.wait(interval):
+            try:
+                emit(_llm_waiting_line(label, now() - start))
+            except Exception:
+                break
+
+    t = threading.Thread(target=_beat, daemon=True)
+    t.start()
+    return t
+
+
+def _run_gemini_stage(client, model_name, prompt, schema, label="llm"):
     """One schema-enforced model call with transient-error backoff.
     Returns (parsed_dict, cost_analysis).
 
@@ -1489,7 +1545,8 @@ def _run_gemini_stage(client, model_name, prompt, schema):
     the call goes there instead of Gemini and ``client`` is unused; the
     retry policy is shared because a local server has the same failure
     shapes (connection refused while the model loads, a truncated body,
-    a 5xx from a busy vLLM)."""
+    a 5xx from a busy vLLM). Each attempt logs a start row and a heartbeat
+    while the blocking call runs, so the panel never sits silent."""
     use_local = llm_backend.active()
     config = None if use_local else genai_types.GenerateContentConfig(
         response_mime_type="application/json",
@@ -1497,6 +1554,10 @@ def _run_gemini_stage(client, model_name, prompt, schema):
     )
     max_attempts = 3
     for attempt in range(1, max_attempts + 1):
+        print(_llm_attempt_line(label, attempt, max_attempts), flush=True)
+        stop = threading.Event()
+        beat = _start_llm_heartbeat(
+            label, emit=lambda ln: print(ln, flush=True), stop=stop)
         try:
             if use_local:
                 return llm_backend.generate_json(prompt, schema, model=model_name)
@@ -1533,8 +1594,11 @@ def _run_gemini_stage(client, model_name, prompt, schema):
                 raise
             wait = 5 * (2 ** (attempt - 1))
             who = "LLM server" if use_local else "Gemini"
-            print(f"⚠️ {who} transient error (attempt {attempt}/{max_attempts}), retrying in {wait}s: {msg[:150]}")
+            print(f"⚠️ {who} transient error (attempt {attempt}/{max_attempts}), retrying in {wait}s: {msg[:150]}", flush=True)
             time.sleep(wait)
+        finally:
+            stop.set()
+            beat.join(timeout=2.0)
 
 
 def _run_stage_split(client, model_name, items, build_prompt, schema, key, costs, label):
@@ -1551,7 +1615,8 @@ def _run_stage_split(client, model_name, items, build_prompt, schema, key, costs
         return []
     prompt = build_prompt(items)
     try:
-        parsed, cost = _run_gemini_stage(client, model_name, prompt, schema)
+        parsed, cost = _run_gemini_stage(client, model_name, prompt, schema,
+                                         label=label)
         if cost:
             costs.append(cost)
         return list(parsed.get(key) or [])

@@ -56,6 +56,21 @@ def test_errors_kept_without_paths():
     assert out is not None and "output/" not in out
 
 
+def test_download_progress_survives_cloud_filter():
+    line = "📥 Downloading… 10.0/100.0 MB (10%) — 8.0 MB/s, ETA 00:29"
+    assert friendly_log_line(line) == line
+
+
 def test_consecutive_duplicates_collapse():
     logs = ["🎙️  Transcribing video...", "🎙️  Transcribing audio from: x.mp4"]
     assert friendly_logs(logs) == ["🎙️ Transcribing audio…"]
+
+
+def test_trim_and_llm_progress_survive_cloud_filter():
+    assert friendly_log_line("✂️ Trimming… 150/300s (50%)") == \
+        "✂️ Trimming… 150/300s (50%)"
+    assert friendly_log_line("🤖 Detail pass (attempt 2/3)…") == \
+        "🤖 Detail pass (attempt 2/3)…"
+    assert friendly_log_line(
+        "🤖 Detail pass still waiting for the model… (40s)") == \
+        "🤖 Detail pass still waiting for the model… (40s)"

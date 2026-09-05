@@ -274,6 +274,20 @@ function App() {
   // Pre-flight quality gate: { info: {max_height, min_height, cookies_invalid}, data }
   const [qualityGate, setQualityGate] = useState(null);
   const [logs, setLogs] = useState([]);
+  // Server-side arrival timestamps parallel to `logs` (epoch seconds, or
+  // null for legacy string entries). Rendered as the row clock — never
+  // new Date() at paint time, which made every row show the latest poll.
+  const [logTs, setLogTs] = useState([]);
+  const applyLogs = (data) => {
+    if (!data) return;
+    if (Array.isArray(data.logs_v2)) {
+      setLogs(data.logs_v2.map((e) => (e && typeof e.msg === 'string' ? e.msg : String(e?.msg ?? ''))));
+      setLogTs(data.logs_v2.map((e) => (typeof e?.ts === 'number' ? e.ts : null)));
+    } else if (Array.isArray(data.logs)) {
+      setLogs(data.logs);
+      setLogTs(data.logs.map(() => null));
+    }
+  };
   // Collapsed on phones: the log tail is the least useful thing on a 360px
   // screen and it was pushing the actual clips a full scroll down.
   const [logsVisible, setLogsVisible] = useState(() => {
@@ -439,7 +453,7 @@ function App() {
     if (data.status === 'completed' || data.status === 'complete') setStatus('complete');
     else if (data.status === 'failed' || data.status === 'error') setStatus('error');
     else setStatus('processing');
-    setLogs(Array.isArray(data.logs) ? data.logs : []);
+    applyLogs(data);
     setActiveTab('dashboard');
   };
 
@@ -459,6 +473,7 @@ function App() {
     setJobId(data.job_id);
     setResults(data.result || null);
     setLogs(['♻️ Project restored from your library.']);
+    setLogTs([null]);
     setProcessingMedia(null);
     setQualityGate(null);
     setStatus('complete');
@@ -715,11 +730,12 @@ function App() {
             setStatus('error');
             const errorMsg = data.error || (data.logs && data.logs.length > 0 ? data.logs[data.logs.length - 1] : "Process failed");
             setLogs(prev => [...prev, "Error: " + errorMsg]);
+            setLogTs(prev => [...prev, Date.now() / 1000]);
             clearInterval(interval);
             refreshMe();
           } else {
             // Update logs if available
-            if (data.logs) setLogs(data.logs);
+            applyLogs(data);
           }
         } catch (e) {
           console.error("Polling error", e);
@@ -887,6 +903,7 @@ function App() {
     }
     setStatus('processing');
     setLogs(["Starting process..."]);
+    setLogTs([Date.now() / 1000]);
     setResults(null);
     // Studio handovers have no local media object; the preview switches to the
     // backend-served source once the job id is known.
@@ -984,6 +1001,7 @@ function App() {
       }
       setStatus('error');
       setLogs(l => [...l, `Error starting job: ${e.message}`]);
+      setLogTs(l => [...l, Date.now() / 1000]);
     }
   };
 
@@ -995,6 +1013,7 @@ function App() {
     setJobId(null);
     setResults(null);
     setLogs([]);
+    setLogTs([]);
     setProcessingMedia(null);
     setProjectState(null);
     setNoSource(false);
@@ -1873,7 +1892,13 @@ function App() {
                     <div className="flex-1 p-3.5 sm:p-4 overflow-y-auto font-mono text-[11px] sm:text-xs space-y-1.5 custom-scrollbar text-muted break-words">
                       {logs.map((log, i) => (
                         <div key={i} className={`flex gap-2 ${log.toLowerCase().includes('error') ? 'text-danger' : 'text-muted'}`}>
-                          <span className="text-muted opacity-50 shrink-0 hidden sm:inline">{new Date().toLocaleTimeString()}</span>
+                          {/* Server arrival time for this row. Null (legacy or
+                              client-side rows) renders no clock rather than a
+                              made-up one — the old new Date() here repainted
+                              every row with the latest poll time. */}
+                          {typeof logTs[i] === 'number' && (
+                            <span className="text-muted opacity-50 shrink-0 hidden sm:inline">{new Date(logTs[i] * 1000).toLocaleTimeString()}</span>
+                          )}
                           <span className="min-w-0 break-words">{log}</span>
                         </div>
                       ))}

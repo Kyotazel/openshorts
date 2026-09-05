@@ -1373,6 +1373,45 @@ _ERROR_MARKERS = ("❌", "ERROR:", "Error:", "Traceback", "FATAL", "Exception",
                   "Execution error:")
 
 
+def _log_messages(logs):
+    """Plain message strings from mixed log entries.
+
+    New entries are {"ts", "msg"} objects stamped at append time; legacy
+    entries recovered from disk are bare strings. Every string-based
+    consumer (cloud filter, error classifier, alerts) goes through here
+    so its behavior never depends on which form an entry has.
+    """
+    out = []
+    for entry in logs or []:
+        if isinstance(entry, dict):
+            out.append(entry.get("msg", ""))
+        else:
+            out.append(entry)
+    return out
+
+
+def _log_entries_with_ts(logs):
+    """Normalize to [{"ts", "msg"}] for the status endpoint's logs_v2.
+
+    Legacy string entries get ts=None — the client renders those without
+    a clock instead of inventing one.
+    """
+    out = []
+    for entry in logs or []:
+        if isinstance(entry, dict):
+            out.append({"ts": entry.get("ts"),
+                        "msg": entry.get("msg", "")})
+        else:
+            out.append({"ts": None, "msg": entry})
+    return out
+
+
+def _append_log(job_id, msg):
+    """Append one log line stamped with the server time of arrival."""
+    if job_id in jobs:
+        jobs[job_id]['logs'].append({"ts": time.time(), "msg": msg})
+
+
 def _job_error_text(logs) -> str:
     """The lines that explain WHY a job failed, for the alert's classifier.
 
@@ -1381,6 +1420,7 @@ def _job_error_text(logs) -> str:
     a silent upload got reported as a broken download path, and a Gemini blip
     as an ffmpeg problem. Pick the error-bearing lines instead, newest last.
     """
+    logs = _log_messages(logs)
     # Per-attempt download warnings are only noise when a later attempt
     # RECOVERED: HD-direct fails on every job (banned server IP) and a static
     # proxy takes over, yet its "Video unavailable" made whole alerts read as
@@ -1772,10 +1812,11 @@ def _visible_logs(logs):
     DEBUG_LOGS=true forces the full output even under billing — for local dev
     where you run in paid mode but still want the raw logs.
     """
+    messages = _log_messages(logs)
     if not BILLING_ENABLED or DEBUG_LOGS:
-        return logs
+        return messages
     from log_view import friendly_logs
-    return friendly_logs(logs)
+    return friendly_logs(messages)
 
 
 def enqueue_output(out, job_id):
@@ -1814,9 +1855,16 @@ def enqueue_output(out, job_id):
                     except Exception:
                         pass
                     continue
+                # yt-dlp internals that add noise but no information: its own
+                # progress rows, merger/ffmpeg command dumps, destination and
+                # downloader-debug lines (incl. googlevideo URLs). Realtime
+                # progress already arrives as our own 📥 rows; the closing
+                # summary is our own ✅ Download complete row.
+                if decoded_line.startswith(("[download]", "[Merger]",
+                                             "[debug]", "[info]")):
+                    continue
                 print(f"📝 [Job Output] {decoded_line}")
-                if job_id in jobs:
-                    jobs[job_id]['logs'].append(decoded_line)
+                _append_log(job_id, decoded_line)
     except Exception as e:
         print(f"Error reading output for job {job_id}: {e}")
     finally:
@@ -1830,7 +1878,7 @@ async def run_job(job_id, job_data):
     output_dir = job_data['output_dir']
     
     jobs[job_id]['status'] = 'processing'
-    jobs[job_id]['logs'].append("Job started by worker.")
+    _append_log(job_id, "Job started by worker.")
     print(f"🎬 [run_job] Executing command for {job_id}: {' '.join(cmd)}")
     
     try:
@@ -1901,7 +1949,7 @@ async def run_job(job_id, job_data):
         
         if returncode == 0:
             jobs[job_id]['status'] = 'completed'
-            jobs[job_id]['logs'].append("Process finished successfully.")
+            _append_log(job_id, "Process finished successfully.")
             
             # Self-host: silent AWS S3 backup. Cloud mode stores to R2 instead
             # (see _archive_managed_job), so skip the redundant/paid AWS upload.
@@ -1932,16 +1980,16 @@ async def run_job(job_id, job_data):
                 jobs[job_id]['result'] = {'clips': clips, 'cost_analysis': cost_analysis}
             else:
                  jobs[job_id]['status'] = 'failed'
-                 jobs[job_id]['logs'].append("No metadata file generated.")
+                 _append_log(job_id, "No metadata file generated.")
         else:
             jobs[job_id]['status'] = 'failed'
-            jobs[job_id]['logs'].append(_scrub_secrets(f"Process failed with exit code {returncode}"))
+            _append_log(job_id, _scrub_secrets(f"Process failed with exit code {returncode}"))
             
     except Exception as e:
         jobs[job_id]['status'] = 'failed'
         # Exception text can embed URLs with credentials (e.g. the proxy URL
         # inside a yt-dlp/httpx error) — scrub before it reaches client logs.
-        jobs[job_id]['logs'].append(_scrub_secrets(f"Execution error: {str(e)}"))
+        _append_log(job_id, _scrub_secrets(f"Execution error: {str(e)}"))
 
 @app.get("/health")
 async def health():
@@ -2839,9 +2887,27 @@ async def get_status(job_id: str, request: Request):
         raise HTTPException(status_code=404, detail="Job not found")
 
     await _assert_job_owner(request, job)
+    # logs: legacy plain strings (unchanged contract — old tabs keep working).
+    # logs_v2: the same lines with server-side arrival timestamps, so the
+    # panel can show when each line actually happened instead of the time
+    # the browser happened to repaint.
+    visible = _log_entries_with_ts(job['logs'])
+    if not BILLING_ENABLED or DEBUG_LOGS:
+        v2 = visible
+    else:
+        # Cloud view: same whitelist + duplicate-collapse as friendly_logs,
+        # keeping each surviving line's original arrival timestamp.
+        from log_view import friendly_logs
+        v2 = []
+        for e in visible:
+            m = friendly_logs([e["msg"]])
+            m = m[0] if m else None
+            if m and (not v2 or v2[-1]["msg"] != m):
+                v2.append({"ts": e["ts"], "msg": m})
     return {
         "status": _presented_status(job_id, job),
         "logs": _visible_logs(job['logs']),
+        "logs_v2": v2,
         "result": job.get('result')
     }
 

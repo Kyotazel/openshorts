@@ -67,6 +67,10 @@ def parse_pair(start, end):
     if s is None or e is None:
         raise ValueError("source_start and source_end are both required")
     return s, e
+
+
+def format_clock(seconds):
+    """Seconds → dashboard clock: 765 → '12:45', 4365 → '1:12:45'."""
     seconds = max(0, int(round(float(seconds))))
     h, rem = divmod(seconds, 3600)
     m, s = divmod(rem, 60)
@@ -75,15 +79,56 @@ def parse_pair(start, end):
     return f"{m}:{s:02d}"
 
 
-def trim_source(path, start, end, run_ffmpeg=None, probe=None):
-    """Re-encode ``path`` to [start, end] and replace it. Returns ``path``."""
+def trim_source(path, start, end, run_ffmpeg=None, probe=None,
+                on_progress=None):
+    """Re-encode ``path`` to [start, end] and replace it. Returns ``path``.
+
+    ``on_progress`` receives ffmpeg -progress chunks (or elapsed/total
+    pairs from a custom runner) so the caller can print percent rows;
+    ``None`` keeps the old silent behavior.
+    """
     start, end = validate_window(start, end)
+    total = end - start
     probe = probe or probe_duration
-    run_ffmpeg = run_ffmpeg or (
-        lambda cmd: subprocess.run(
-            cmd, check=True, stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE, timeout=3600)
-    )
+    if run_ffmpeg is None:
+        import trim_progress as _tp
+
+        def run_ffmpeg(cmd, _tp=_tp, _total=total, _cb=on_progress):
+            reporter = _tp.TrimProgress(
+                _total,
+                emit=(lambda line: print(line, flush=True)) if _cb is None
+                else (lambda line: (_cb(line), print(line, flush=True))[1]),
+            )
+            cmd = list(cmd)
+            try:
+                prog_idx = cmd.index("-progress")
+                cmd[prog_idx + 1] = "pipe:1"
+            except (ValueError, IndexError):
+                cmd[1:1] = ["-progress", "pipe:1", "-nostats"]
+            proc = subprocess.Popen(
+                cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                text=True, bufsize=1)
+            chunks, stderr_tail = [], []
+            try:
+                for raw in iter(proc.stdout.readline, ""):
+                    chunks.append(raw)
+                    if "progress=" in raw:
+                        reporter.feed("".join(chunks))
+                        chunks = []
+                _, stderr = proc.communicate(timeout=3600)
+                stderr_tail = stderr or ""
+                if proc.returncode != 0:
+                    raise subprocess.CalledProcessError(
+                        proc.returncode, cmd, stderr=stderr_tail)
+                reporter.feed("progress=end\n")
+                return None
+            finally:
+                try:
+                    if proc.poll() is None:
+                        proc.kill()
+                except Exception:
+                    pass
+
     dirname, base = os.path.split(path)
     tmp = os.path.join(dirname, f".trim_{base}")
     cmd = [

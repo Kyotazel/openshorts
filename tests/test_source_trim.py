@@ -20,6 +20,14 @@ def test_reservation_minutes_ceils_slice():
     assert st.reservation_minutes(0, 10) == 1
 
 
+def test_format_clock():
+    # main.py's trim log line calls this; it must exist and round-trip
+    # the dashboard's mm:ss convention.
+    assert st.format_clock(765) == "12:45"
+    assert st.format_clock(4365) == "1:12:45"
+    assert st.format_clock(0) == "0:00"
+
+
 def test_validate_inverted():
     with pytest.raises(ValueError):
         st.validate_window(20, 10)

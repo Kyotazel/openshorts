@@ -7,8 +7,14 @@ internals. Anything not matched by a rule is hidden.
 """
 import re
 
-# Strips any slashy path token (output/…/clip.mp4, /app/uploads/x.mp4, …).
-_PATH_RE = re.compile(r'(?:/?[\w.\-]+/)+[\w.\-]+')
+# Strips file-path tokens (output/…/clip.mp4, /app/uploads/x.mp4, …) but
+# leaves progress ratios like 10.0/100.0 MB and units like MB/s alone:
+# a token only counts as a path when it has 2+ slashes or a lettered file
+# extension (so 100.0 does not look like ".0" extension, MB/s has no dot).
+_PATH_RE = re.compile(
+    r'(?:/?[A-Za-z0-9_.\-]+/){2,}[A-Za-z0-9_.\-]+'
+    r'|[A-Za-z0-9_.\-]+/[A-Za-z0-9_.\-]*\.[A-Za-z][A-Za-z0-9]{0,4}\b'
+)
 
 
 def _strip_paths(line):
@@ -21,6 +27,12 @@ _RULES = [
     # Worker/job lifecycle + errors: keep, minus any paths.
     (re.compile(r'^(Job started|Process finished|Process failed|'
                 r'Execution error|No metadata|❌)'), None),
+    # Live download progress emitted by download_progress.DownloadProgress.
+    (re.compile(r'^📥 Downloading…'), None),
+    # Live trim progress emitted by trim_progress.TrimProgress.
+    (re.compile(r'^✂️ Trimming…'), None),
+    # Live LLM pass progress: attempt starts + waiting heartbeats.
+    (re.compile(r'^🤖 (Score|Detail) pass (\(attempt|still waiting)'), None),
     # Live transcription progress emitted by transcribe_backends.
     (re.compile(r'^🎙️ Transcribing… \d+%'), None),
     (re.compile(r'Transcribing (video|audio)'), '🎙️ Transcribing audio…'),

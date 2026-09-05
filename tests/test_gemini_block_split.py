@@ -10,7 +10,7 @@ def _windows(n):
 
 def test_block_on_pair_isolates_and_drops_only_the_culprit(monkeypatch):
     calls = []
-    def fake_stage(client, model, prompt, schema):
+    def fake_stage(client, model, prompt, schema, label="llm"):
         ids = [w["id"] for w in __import__("json").loads(prompt)]
         calls.append(ids)
         if "w5" in ids and "w6" in ids:      # the pair that trips the filter
@@ -35,7 +35,7 @@ def test_block_on_pair_isolates_and_drops_only_the_culprit(monkeypatch):
 
 def test_no_block_is_a_single_call(monkeypatch):
     calls = []
-    def fake_stage(client, model, prompt, schema):
+    def fake_stage(client, model, prompt, schema, label="llm"):
         calls.append(prompt)
         return {"shorts": [{"start": 0, "end": 20}]}, None
     monkeypatch.setattr(main, "_run_gemini_stage", fake_stage)

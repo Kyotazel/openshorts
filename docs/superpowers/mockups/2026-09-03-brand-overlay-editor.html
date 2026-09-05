@@ -1,0 +1,786 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Brand overlay editor — mockup</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Instrument+Serif:ital@0;1&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --paper: oklch(13% 0.014 265);
+      --paper-2: oklch(16.5% 0.015 265);
+      --paper-3: oklch(20% 0.016 265);
+      --ink: oklch(96% 0.006 262);
+      --ink-2: oklch(86% 0.01 262);
+      --muted: oklch(64% 0.012 262);
+      --rule: oklch(96% 0.006 262 / 0.08);
+      --rule-2: oklch(96% 0.006 262 / 0.14);
+      --accent: oklch(76% 0.17 50);
+      --accent-ink: oklch(17% 0.03 50);
+      --ok: oklch(75% 0.11 150);
+      --danger: oklch(66% 0.18 25);
+      --font-display: "Instrument Serif", ui-serif, Georgia, serif;
+      --font-body: "Geist", ui-sans-serif, system-ui, sans-serif;
+      --font-mono: "JetBrains Mono", ui-monospace, monospace;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { height: 100%; }
+    body {
+      font-family: var(--font-body);
+      background: var(--paper);
+      color: var(--ink);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    .topbar {
+      display: flex; align-items: center; gap: 1rem;
+      padding: 0.65rem 1rem; border-bottom: 1px solid var(--rule);
+      background: var(--paper-2); flex-shrink: 0;
+    }
+    .topbar h1 {
+      font-family: var(--font-display); font-size: 1.35rem; font-weight: 400;
+      letter-spacing: -0.02em; text-transform: lowercase;
+    }
+    .topbar .clip { font-family: var(--font-mono); font-size: 0.7rem; color: var(--muted); }
+    .topbar .spacer { flex: 1; }
+    .btn {
+      font-family: var(--font-mono); font-size: 0.7rem; text-transform: lowercase;
+      border-radius: 6px; padding: 0.45rem 0.85rem;
+      border: 1px solid var(--rule-2); background: transparent; color: var(--ink); cursor: pointer;
+    }
+    .btn:hover { border-color: var(--accent); }
+    .btn-primary {
+      background: var(--accent); color: var(--accent-ink); border-color: transparent; font-weight: 500;
+    }
+    .badge {
+      font-family: var(--font-mono); font-size: 0.65rem; color: var(--muted);
+      border: 1px solid var(--rule); padding: 0.2rem 0.5rem; border-radius: 4px;
+    }
+    .workbench {
+      flex: 1; display: grid; grid-template-columns: 1fr minmax(280px, 320px); min-height: 0;
+    }
+    .stage {
+      display: flex; flex-direction: column; min-width: 0; border-right: 1px solid var(--rule);
+    }
+    .preview-wrap {
+      flex: 1; display: flex; align-items: center; justify-content: center;
+      padding: 1.25rem; min-height: 0;
+      background: radial-gradient(80% 60% at 50% 40%, oklch(76% 0.17 50 / 0.04), transparent 70%), var(--paper);
+    }
+    .phone {
+      position: relative; width: min(280px, 36vh * 9 / 16); aspect-ratio: 9 / 16;
+      background: #1a1a22; border-radius: 10px; overflow: hidden;
+      border: 1px solid var(--rule-2); box-shadow: 0 20px 60px oklch(0% 0 0 / 0.45);
+      user-select: none;
+    }
+    .phone .bg {
+      position: absolute; inset: 0;
+      background: linear-gradient(180deg, #2a3040 0%, #1a1e28 60%, #12151c 100%);
+    }
+    .phone .person {
+      position: absolute; left: 50%; top: 42%; transform: translate(-50%, -50%);
+      width: 62%; height: 48%; border-radius: 50% 50% 40% 40%;
+      background: radial-gradient(circle at 40% 35%, #c4a882 0%, #8b6b4a 45%, #3d2a1a 100%);
+    }
+    .phone .person::after {
+      content: ""; position: absolute; bottom: -18%; left: 10%; right: 10%; height: 40%;
+      background: #2c3548; border-radius: 8px 8px 0 0;
+    }
+    .ov {
+      position: absolute; cursor: grab; z-index: 2;
+    }
+    .ov.selected {
+      outline: 1.5px solid var(--accent); outline-offset: 2px; z-index: 5;
+    }
+    .ov .handle {
+      position: absolute; width: 8px; height: 8px; right: -4px; bottom: -4px;
+      background: var(--accent); border: 1px solid var(--accent-ink); border-radius: 1px;
+      cursor: nwse-resize; display: none;
+    }
+    .ov.selected .handle { display: block; }
+    .ov-wm {
+      left: 6%; top: 5%; width: 36%;
+      display: flex; align-items: center; gap: 4px; padding: 4px 7px;
+      background: oklch(100% 0 0 / 0.92); border-radius: 4px;
+    }
+    .ov-wm .ico {
+      width: 14px; height: 14px; border-radius: 3px;
+      background: linear-gradient(135deg, #3b82f6, #1d4ed8); flex-shrink: 0;
+    }
+    .ov-wm .lbl { font-size: 8px; font-weight: 600; color: #1e3a8a; white-space: nowrap; }
+    .ov-ads {
+      left: 8%; top: 28%; width: 84%;
+      background: linear-gradient(160deg, #0f172a 0%, #1e3a5f 50%, #0c4a6e 100%);
+      border-radius: 6px; padding: 10px 12px;
+      border: 1px solid oklch(70% 0.1 220 / 0.35);
+    }
+    .ov-ads h3 { font-size: 9px; font-weight: 600; color: #e2e8f0; line-height: 1.25; margin-bottom: 6px; }
+    .ov-ads .icons { display: flex; gap: 4px; flex-wrap: wrap; }
+    .ov-ads .icons span {
+      width: 12px; height: 12px; border-radius: 3px; background: oklch(80% 0.08 220 / 0.5);
+    }
+    .ov-img {
+      background: oklch(70% 0.12 80); border-radius: 4px; border: 1px solid oklch(80% 0.1 80 / 0.5);
+      display: flex; align-items: center; justify-content: center;
+      font-family: var(--font-mono); font-size: 0.55rem; color: var(--accent-ink); font-weight: 600;
+      padding: 6px; text-align: center; line-height: 1.2;
+    }
+    .ov-vid {
+      background: linear-gradient(135deg, #3b1f4a, #1a3a4a);
+      border-radius: 4px; border: 1px solid oklch(70% 0.1 300 / 0.4);
+      display: flex; align-items: center; justify-content: center;
+      font-family: var(--font-mono); font-size: 0.55rem; color: #e9d5ff; padding: 8px; text-align: center;
+    }
+    .preview-hint {
+      position: absolute; bottom: 8px; left: 50%; transform: translateX(-50%);
+      font-family: var(--font-mono); font-size: 0.55rem; color: oklch(96% 0.006 262 / 0.45);
+      white-space: nowrap; pointer-events: none;
+    }
+    .panel {
+      display: flex; flex-direction: column; background: var(--paper-2); min-height: 0; overflow: auto;
+    }
+    .panel-section {
+      padding: 0.85rem 1rem; border-bottom: 1px solid var(--rule);
+    }
+    .panel-section h2 {
+      font-family: var(--font-mono); font-size: 0.65rem; text-transform: lowercase;
+      color: var(--muted); letter-spacing: 0.04em; margin-bottom: 0.65rem;
+    }
+    .layers-head {
+      display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.65rem;
+    }
+    .layers-head h2 { margin-bottom: 0; }
+    .btn-add {
+      font-family: var(--font-mono); font-size: 0.65rem; text-transform: lowercase;
+      padding: 0.35rem 0.65rem; border-radius: 6px;
+      border: 1px dashed var(--accent); background: oklch(76% 0.17 50 / 0.08);
+      color: var(--accent); cursor: pointer;
+    }
+    .btn-add:hover { background: oklch(76% 0.17 50 / 0.16); }
+    .layer-row {
+      display: flex; align-items: center; gap: 0.5rem;
+      padding: 0.45rem 0.5rem; border-radius: 6px; border: 1px solid transparent;
+      cursor: pointer; margin-bottom: 0.3rem;
+    }
+    .layer-row:hover { background: var(--paper-3); }
+    .layer-row.active { background: var(--paper-3); border-color: var(--rule-2); }
+    .layer-row .swatch {
+      width: 26px; height: 26px; border-radius: 4px; flex-shrink: 0; border: 1px solid var(--rule);
+    }
+    .layer-row .swatch.wm { background: #fff; }
+    .layer-row .swatch.ads { background: linear-gradient(135deg, #0f172a, #0c4a6e); }
+    .layer-row .swatch.bgm { background: oklch(35% 0.06 250); }
+    .layer-row .swatch.img { background: oklch(70% 0.12 80); }
+    .layer-row .swatch.vid { background: linear-gradient(135deg, #3b1f4a, #1a3a4a); }
+    .layer-row .swatch.aud { background: oklch(40% 0.08 280); }
+    .layer-row .meta { flex: 1; min-width: 0; }
+    .layer-row .meta .name {
+      font-size: 0.78rem; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .layer-row .meta .file {
+      font-family: var(--font-mono); font-size: 0.55rem; color: var(--muted);
+    }
+    .layer-row .badge-kit {
+      font-family: var(--font-mono); font-size: 0.5rem; color: var(--muted);
+      border: 1px solid var(--rule); padding: 0.1rem 0.3rem; border-radius: 3px;
+    }
+    .eye, .btn-del {
+      width: 26px; height: 26px; border: none; background: transparent; color: var(--muted);
+      cursor: pointer; border-radius: 4px; display: flex; align-items: center; justify-content: center;
+      font-size: 0.85rem;
+    }
+    .eye:hover, .btn-del:hover { color: var(--ink); background: var(--paper); }
+    .eye.off { color: var(--danger); opacity: 0.7; }
+    .btn-del:hover { color: var(--danger); }
+    .field {
+      display: grid; grid-template-columns: 52px 1fr 48px; align-items: center;
+      gap: 0.5rem; margin-bottom: 0.55rem;
+    }
+    .field label {
+      font-family: var(--font-mono); font-size: 0.65rem; color: var(--muted); text-transform: lowercase;
+    }
+    .field input[type="range"] { width: 100%; accent-color: var(--accent); }
+    .field .val { font-family: var(--font-mono); font-size: 0.65rem; color: var(--ink-2); text-align: right; }
+    .field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; margin-bottom: 0.55rem; }
+    .field-row .mini { display: flex; flex-direction: column; gap: 0.25rem; }
+    .field-row .mini label {
+      font-family: var(--font-mono); font-size: 0.6rem; color: var(--muted); text-transform: lowercase;
+    }
+    .field-row .mini input[type="number"] {
+      font-family: var(--font-mono); font-size: 0.75rem; background: var(--paper);
+      border: 1px solid var(--rule-2); color: var(--ink); border-radius: 5px; padding: 0.35rem 0.5rem; width: 100%;
+    }
+    .kit-note { font-size: 0.7rem; color: var(--muted); line-height: 1.4; }
+    .media-item {
+      display: flex; align-items: center; gap: 0.5rem;
+      padding: 0.4rem 0.5rem; border-radius: 6px; margin-bottom: 0.3rem;
+      border: 1px solid var(--rule); background: var(--paper);
+    }
+    .media-item .thumb {
+      width: 32px; height: 32px; border-radius: 4px; flex-shrink: 0;
+      display: flex; align-items: center; justify-content: center;
+      font-family: var(--font-mono); font-size: 0.5rem; color: var(--muted);
+      border: 1px solid var(--rule);
+    }
+    .media-item .thumb.img { background: #fff; color: #1e3a8a; }
+    .media-item .thumb.vid { background: linear-gradient(135deg, #0f172a, #0c4a6e); color: #e2e8f0; }
+    .media-item .thumb.aud { background: oklch(35% 0.06 250); color: var(--ink-2); }
+    .media-item .meta { flex: 1; min-width: 0; }
+    .media-item .meta .name {
+      font-size: 0.72rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .media-item .meta .hint { font-family: var(--font-mono); font-size: 0.55rem; color: var(--muted); }
+    .media-item .btn-insert {
+      font-family: var(--font-mono); font-size: 0.55rem; text-transform: lowercase;
+      padding: 0.25rem 0.45rem; border-radius: 4px;
+      border: 1px solid var(--rule-2); background: var(--paper-3); color: var(--ink); cursor: pointer;
+    }
+    .media-item .btn-insert:hover { border-color: var(--accent); }
+    .dropzone {
+      border: 1px dashed var(--rule-2); border-radius: 6px; padding: 0.75rem;
+      text-align: center; font-family: var(--font-mono); font-size: 0.65rem; color: var(--muted);
+      margin-bottom: 0.55rem; cursor: pointer; transition: border-color 0.12s, background 0.12s;
+    }
+    .dropzone:hover { border-color: var(--accent); background: oklch(76% 0.17 50 / 0.04); }
+    input[type="file"] { display: none; }
+    .timeline {
+      flex-shrink: 0; border-top: 1px solid var(--rule); background: var(--paper-2);
+      padding: 0.65rem 1rem 0.85rem; max-height: 42%; overflow: auto;
+    }
+    .tl-head { display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.55rem; }
+    .tl-head .time { font-family: var(--font-mono); font-size: 0.7rem; color: var(--ink-2); }
+    .tl-head .spacer { flex: 1; }
+    .play-btn {
+      width: 28px; height: 28px; border-radius: 50%; border: 1px solid var(--rule-2);
+      background: var(--paper-3); color: var(--ink); cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .tl-ruler {
+      height: 16px; margin-left: 72px; position: relative;
+      font-family: var(--font-mono); font-size: 0.55rem; color: var(--muted);
+    }
+    .tl-ruler span { position: absolute; transform: translateX(-50%); }
+    .tl-tracks { position: relative; display: flex; flex-direction: column; gap: 4px; }
+    .track {
+      display: grid; grid-template-columns: 72px 1fr; align-items: center; min-height: 26px;
+    }
+    .track .label {
+      font-family: var(--font-mono); font-size: 0.55rem; color: var(--muted);
+      text-transform: lowercase; padding-right: 0.5rem; text-align: right;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .track .lane {
+      position: relative; height: 24px; background: var(--paper);
+      border-radius: 4px; border: 1px solid var(--rule);
+    }
+    .block {
+      position: absolute; top: 2px; bottom: 2px; border-radius: 3px;
+      font-family: var(--font-mono); font-size: 0.5rem;
+      display: flex; align-items: center; padding: 0 5px; white-space: nowrap; overflow: hidden;
+    }
+    .block.video { left: 0; right: 0; background: oklch(35% 0.04 265); color: var(--ink-2); opacity: 0.85; }
+    .block.timed {
+      background: oklch(55% 0.12 230); color: white; cursor: grab;
+      border: 1px solid oklch(70% 0.1 230 / 0.5);
+    }
+    .block.timed.selected { outline: 1.5px solid var(--accent); outline-offset: 1px; }
+    .block.timed.img { background: oklch(55% 0.12 80); }
+    .block.timed.vid { background: oklch(50% 0.12 300); }
+    .block.full {
+      left: 0; right: 0; background: oklch(40% 0.08 280 / 0.7); color: var(--ink-2);
+      background-image: repeating-linear-gradient(90deg, transparent, transparent 3px, oklch(70% 0.1 280 / 0.25) 3px, oklch(70% 0.1 280 / 0.25) 4px);
+    }
+    .playhead {
+      position: absolute; top: 0; bottom: 0; width: 1px; background: var(--accent);
+      z-index: 5; pointer-events: none; left: 42%;
+    }
+    .banner {
+      position: fixed; bottom: 1rem; left: 50%; transform: translateX(-50%);
+      font-family: var(--font-mono); font-size: 0.65rem; background: var(--paper-3);
+      border: 1px solid var(--rule-2); color: var(--muted); padding: 0.4rem 0.85rem;
+      border-radius: 6px; z-index: 20; pointer-events: none;
+    }
+    @media (max-width: 800px) {
+      .workbench { grid-template-columns: 1fr; }
+      .panel { max-height: 42vh; }
+      .stage { border-right: none; }
+    }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <h1>brand overlay</h1>
+    <span class="clip">clip 2 · 0:30</span>
+    <span class="badge">mockup — bukan fitur asli</span>
+    <div class="spacer"></div>
+    <button class="btn" type="button" id="btnReset">reset kit default</button>
+    <button class="btn" type="button">tutup</button>
+    <button class="btn btn-primary" type="button">generate</button>
+  </header>
+
+  <div class="workbench">
+    <div class="stage">
+      <div class="preview-wrap">
+        <div class="phone" id="phone">
+          <div class="bg"></div>
+          <div class="person"></div>
+          <div id="overlays"></div>
+          <div class="preview-hint">+ add layer · drag di kanvas · geser blok di timeline</div>
+        </div>
+      </div>
+
+      <div class="timeline">
+        <div class="tl-head">
+          <button class="play-btn" type="button" aria-label="play">
+            <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor"><path d="M2 1l7 4-7 4z"/></svg>
+          </button>
+          <span class="time">0:12.6 / 0:30.0</span>
+          <div class="spacer"></div>
+          <span class="time" style="color:var(--muted)">tiap layer visual = 1 track</span>
+        </div>
+        <div class="tl-ruler">
+          <span style="left:0%">0:00</span>
+          <span style="left:25%">0:07</span>
+          <span style="left:50%">0:15</span>
+          <span style="left:75%">0:22</span>
+          <span style="left:100%">0:30</span>
+        </div>
+        <div class="tl-tracks" id="tracks"></div>
+      </div>
+    </div>
+
+    <aside class="panel">
+      <div class="panel-section">
+        <div class="layers-head">
+          <h2>layers on clip</h2>
+          <button class="btn-add" type="button" id="btnAddLayer">+ add layer</button>
+        </div>
+        <p class="kit-note" style="margin-bottom:0.55rem">
+          Upload file = <b>layer baru</b> di video (bukan ganti slot).
+          Image/video bisa digeser &amp; di-scale; audio = track BGM tambahan.
+        </p>
+        <div id="layerList"></div>
+        <input type="file" id="addLayerInput" accept="image/*,video/mp4,video/webm,audio/*" />
+      </div>
+
+      <div class="panel-section" id="propsSection">
+        <h2 id="propsTitle">transform</h2>
+        <div id="propsVisual">
+          <div class="field">
+            <label>scale</label>
+            <input type="range" id="scale" min="10" max="120" value="84" />
+            <span class="val" id="scaleVal">84%</span>
+          </div>
+          <div class="field-row">
+            <div class="mini"><label>x</label><input type="number" id="posX" value="8" /></div>
+            <div class="mini"><label>y</label><input type="number" id="posY" value="28" /></div>
+          </div>
+          <div class="field" id="startField">
+            <label>start</label>
+            <input type="range" id="start" min="0" max="24" value="10.5" step="0.1" />
+            <span class="val" id="startVal">0:10.5</span>
+          </div>
+        </div>
+        <div id="propsAudio" hidden>
+          <div class="field">
+            <label>volume</label>
+            <input type="range" id="vol" min="0" max="100" value="35" />
+            <span class="val" id="volVal">35%</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel-section">
+        <h2>media library</h2>
+        <p class="kit-note" style="margin-bottom:0.45rem">
+          File tersimpan di server. <b>insert</b> menambah layer ke clip ini.
+          Kit default (auto di clip baru) ditandai.
+        </p>
+        <div class="dropzone" id="libDrop">upload ke library…</div>
+        <input type="file" id="libInput" accept="image/*,video/mp4,video/webm,audio/*" multiple />
+        <div id="mediaLib"></div>
+      </div>
+    </aside>
+  </div>
+
+  <div class="banner">mockup · + add layer = upload masuk ke video · insert dari library</div>
+
+  <script>
+    const CLIP = 30;
+    let seq = 1;
+    let selectedId = null;
+
+    /** @type {Array<{id,name,kind:'wm'|'ads'|'img'|'vid'|'aud', fromKit?:boolean, x,y,scale,start,duration,full?,visible,volume?}>} */
+    let layers = [];
+    /** @type {Array<{id,name,kind}>} */
+    let library = [
+      { id: "lib-wm", name: "wm.png", kind: "img", kitDefault: "wm" },
+      { id: "lib-ads", name: "ads-aura.mp4", kind: "vid", kitDefault: "ads", duration: 5.4 },
+      { id: "lib-bgm", name: "AutoAudit-Whatsapp.mp3", kind: "aud", kitDefault: "bgm" },
+    ];
+
+    function fmt(t) {
+      const m = Math.floor(t / 60);
+      const s = (t - m * 60).toFixed(1);
+      return m + ":" + s.padStart(4, "0");
+    }
+
+    function shortName(n) {
+      return n.length > 18 ? n.slice(0, 15) + "…" : n;
+    }
+
+    function resetFromKit() {
+      layers = [
+        { id: "L-wm", name: "wm.png", kind: "wm", fromKit: true, x: 6, y: 5, scale: 36, start: 0, duration: CLIP, full: true, visible: true },
+        { id: "L-ads", name: "ads-aura.mp4", kind: "ads", fromKit: true, x: 8, y: 28, scale: 84, start: 10.5, duration: 5.4, visible: true },
+        { id: "L-bgm", name: "AutoAudit-Whatsapp.mp3", kind: "aud", fromKit: true, start: 0, duration: CLIP, full: true, visible: true, volume: 35 },
+      ];
+      selectedId = "L-ads";
+      render();
+    }
+
+    function kindClass(k) {
+      if (k === "wm") return "wm";
+      if (k === "ads") return "ads";
+      if (k === "aud") return "aud";
+      if (k === "vid") return "vid";
+      return "img";
+    }
+
+    function detectKind(file) {
+      if (file.type.startsWith("audio/")) return "aud";
+      if (file.type.startsWith("video/")) return "vid";
+      return "img";
+    }
+
+    function addLayerFromFile(file, opts = {}) {
+      const kind = opts.kind || detectKind(file);
+      const id = "L-" + (seq++);
+      const duration = opts.duration || (kind === "vid" ? 4 : kind === "aud" ? CLIP : CLIP);
+      const layer = {
+        id,
+        name: file.name || opts.name || "layer",
+        kind: kind === "img" && opts.asWm ? "wm" : kind === "vid" && opts.asAds ? "ads" : kind,
+        fromKit: !!opts.fromKit,
+        x: opts.x ?? (kind === "aud" ? 0 : 20 + Math.random() * 20),
+        y: opts.y ?? (kind === "aud" ? 0 : 40 + Math.random() * 15),
+        scale: opts.scale ?? (kind === "aud" ? 100 : kind === "img" ? 40 : 50),
+        start: opts.start ?? (kind === "aud" || kind === "img" && opts.full ? 0 : Math.max(0, (CLIP - duration) / 2)),
+        duration,
+        full: kind === "aud" || !!opts.full,
+        visible: true,
+        volume: 35,
+      };
+      if (layer.kind === "wm") { layer.x = 6; layer.y = 5; layer.scale = 36; layer.full = true; layer.start = 0; layer.duration = CLIP; }
+      layers.push(layer);
+      selectedId = id;
+      render();
+    }
+
+    function addLayerFromLibrary(item) {
+      if (item.kind === "aud") {
+        addLayerFromFile({ name: item.name, type: "audio/mpeg" }, { kind: "aud", fromKit: !!item.kitDefault, full: true, start: 0, duration: CLIP });
+      } else if (item.kind === "vid") {
+        addLayerFromFile({ name: item.name, type: "video/mp4" }, {
+          kind: "vid", asAds: item.kitDefault === "ads", fromKit: !!item.kitDefault,
+          duration: item.duration || 5, start: 10.5, x: 8, y: 28, scale: 84,
+        });
+      } else {
+        addLayerFromFile({ name: item.name, type: "image/png" }, {
+          kind: "img", asWm: item.kitDefault === "wm", fromKit: !!item.kitDefault,
+          full: item.kitDefault === "wm", x: 6, y: 5, scale: 36,
+        });
+      }
+    }
+
+    function selected() {
+      return layers.find((l) => l.id === selectedId);
+    }
+
+    function renderOverlays() {
+      const root = document.getElementById("overlays");
+      root.innerHTML = "";
+      layers.filter((l) => l.visible && l.kind !== "aud").forEach((l) => {
+        const el = document.createElement("div");
+        el.className = "ov" + (l.id === selectedId ? " selected" : "");
+        el.dataset.id = l.id;
+        el.style.left = l.x + "%";
+        el.style.top = l.y + "%";
+        el.style.width = l.scale + "%";
+        if (l.kind === "wm") {
+          el.classList.add("ov-wm");
+          el.innerHTML = '<div class="ico"></div><div class="lbl">auto audit</div><div class="handle"></div>';
+        } else if (l.kind === "ads") {
+          el.classList.add("ov-ads");
+          el.innerHTML = '<h3>Analyzed Across Multiple Channels</h3><div class="icons"><span></span><span></span><span></span><span></span></div><div class="handle"></div>';
+        } else if (l.kind === "vid") {
+          el.classList.add("ov-vid");
+          el.innerHTML = shortName(l.name) + '<div class="handle"></div>';
+        } else {
+          el.classList.add("ov-img");
+          el.innerHTML = shortName(l.name) + '<div class="handle"></div>';
+        }
+        makeDraggable(el, l.id);
+        root.appendChild(el);
+      });
+    }
+
+    function renderList() {
+      const list = document.getElementById("layerList");
+      list.innerHTML = "";
+      // top of list = top of stack visually
+      [...layers].reverse().forEach((l) => {
+        const row = document.createElement("div");
+        row.className = "layer-row" + (l.id === selectedId ? " active" : "");
+        row.innerHTML = `
+          <div class="swatch ${kindClass(l.kind)}"></div>
+          <div class="meta">
+            <div class="name">${l.name}</div>
+            <div class="file">${l.kind === "aud" ? "audio" : "overlay"} · ${l.full ? "full clip" : fmt(l.start) + "–" + fmt(l.start + l.duration)}</div>
+          </div>
+          ${l.fromKit ? '<span class="badge-kit">kit</span>' : ""}
+          <button class="eye${l.visible ? "" : " off"}" type="button" data-eye="${l.id}" title="hide">👁</button>
+          <button class="btn-del" type="button" data-del="${l.id}" title="hapus layer">×</button>
+        `;
+        row.addEventListener("click", (e) => {
+          if (e.target.closest("[data-eye]") || e.target.closest("[data-del]")) return;
+          selectedId = l.id;
+          render();
+        });
+        list.appendChild(row);
+      });
+      list.querySelectorAll("[data-eye]").forEach((btn) => {
+        btn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          const l = layers.find((x) => x.id === btn.dataset.eye);
+          if (l) { l.visible = !l.visible; render(); }
+        });
+      });
+      list.querySelectorAll("[data-del]").forEach((btn) => {
+        btn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          layers = layers.filter((x) => x.id !== btn.dataset.del);
+          if (selectedId === btn.dataset.del) selectedId = layers[0]?.id || null;
+          render();
+        });
+      });
+    }
+
+    function renderTimeline() {
+      const tracks = document.getElementById("tracks");
+      tracks.innerHTML = "";
+      const video = document.createElement("div");
+      video.className = "track";
+      video.innerHTML = `<div class="label">video</div><div class="lane"><div class="block video">clip-2.mp4</div></div>`;
+      tracks.appendChild(video);
+
+      layers.forEach((l) => {
+        const tr = document.createElement("div");
+        tr.className = "track";
+        const label = shortName(l.name.replace(/\.[^.]+$/, ""));
+        let block;
+        if (l.kind === "aud" || l.full) {
+          block = `<div class="block full">${shortName(l.name)}</div>`;
+        } else {
+          const left = (l.start / CLIP) * 100;
+          const width = (l.duration / CLIP) * 100;
+          const cls = "block timed" + (l.id === selectedId ? " selected" : "") + (l.kind === "img" || l.kind === "wm" ? " img" : " vid");
+          block = `<div class="${cls}" data-block="${l.id}" style="left:${left}%;width:${width}%">${shortName(l.name)}</div>`;
+        }
+        tr.innerHTML = `<div class="label" title="${l.name}">${label}</div><div class="lane">${block}</div>`;
+        tracks.appendChild(tr);
+      });
+
+      const ph = document.createElement("div");
+      ph.className = "playhead";
+      ph.style.height = (26 + layers.length * 28) + "px";
+      ph.style.top = "0";
+      tracks.style.position = "relative";
+      tracks.appendChild(ph);
+
+      tracks.querySelectorAll("[data-block]").forEach((el) => {
+        let dragging = false;
+        el.addEventListener("pointerdown", (e) => {
+          selectedId = el.dataset.block;
+          dragging = true;
+          el.setPointerCapture(e.pointerId);
+          renderProps();
+          e.preventDefault();
+        });
+        el.addEventListener("pointermove", (e) => {
+          if (!dragging) return;
+          const lane = el.parentElement.getBoundingClientRect();
+          const l = layers.find((x) => x.id === el.dataset.block);
+          if (!l) return;
+          let sec = (e.clientX - lane.left) / lane.width * CLIP - l.duration / 2;
+          sec = Math.max(0, Math.min(CLIP - l.duration, sec));
+          l.start = sec;
+          el.style.left = (sec / CLIP) * 100 + "%";
+          if (selectedId === l.id) {
+            document.getElementById("start").value = sec;
+            document.getElementById("startVal").textContent = fmt(sec);
+          }
+        });
+        el.addEventListener("pointerup", () => {
+          dragging = false;
+          renderList();
+        });
+        el.addEventListener("click", () => { selectedId = el.dataset.block; render(); });
+      });
+    }
+
+    function renderProps() {
+      const l = selected();
+      const title = document.getElementById("propsTitle");
+      const visual = document.getElementById("propsVisual");
+      const audio = document.getElementById("propsAudio");
+      if (!l) {
+        title.textContent = "no layer";
+        visual.hidden = true;
+        audio.hidden = true;
+        return;
+      }
+      title.textContent = shortName(l.name) + (l.kind === "aud" ? " · audio" : " · transform");
+      if (l.kind === "aud") {
+        visual.hidden = true;
+        audio.hidden = false;
+        document.getElementById("vol").value = l.volume ?? 35;
+        document.getElementById("volVal").textContent = (l.volume ?? 35) + "%";
+      } else {
+        visual.hidden = false;
+        audio.hidden = true;
+        document.getElementById("scale").value = l.scale;
+        document.getElementById("scaleVal").textContent = l.scale + "%";
+        document.getElementById("posX").value = Math.round(l.x);
+        document.getElementById("posY").value = Math.round(l.y);
+        const sf = document.getElementById("startField");
+        sf.hidden = !!l.full;
+        document.getElementById("start").value = l.start;
+        document.getElementById("startVal").textContent = fmt(l.start);
+        document.getElementById("start").max = Math.max(0, CLIP - l.duration);
+      }
+    }
+
+    function renderLibrary() {
+      const root = document.getElementById("mediaLib");
+      root.innerHTML = "";
+      library.forEach((item) => {
+        const el = document.createElement("div");
+        el.className = "media-item";
+        el.innerHTML = `
+          <div class="thumb ${item.kind}">${item.kind}</div>
+          <div class="meta">
+            <div class="name">${item.name}</div>
+            <div class="hint">${item.kitDefault ? "kit default · auto di clip baru" : "library"}</div>
+          </div>
+          <button class="btn-insert" type="button">insert</button>
+        `;
+        el.querySelector(".btn-insert").addEventListener("click", () => addLayerFromLibrary(item));
+        root.appendChild(el);
+      });
+    }
+
+    function render() {
+      renderOverlays();
+      renderList();
+      renderTimeline();
+      renderProps();
+      renderLibrary();
+    }
+
+    function makeDraggable(el, id) {
+      let dragging = false, ox = 0, oy = 0;
+      el.addEventListener("pointerdown", (e) => {
+        if (e.target.classList.contains("handle")) return;
+        selectedId = id;
+        dragging = true;
+        el.setPointerCapture(e.pointerId);
+        const r = el.getBoundingClientRect();
+        ox = e.clientX - r.left;
+        oy = e.clientY - r.top;
+        renderList();
+        renderProps();
+        document.querySelectorAll(".ov").forEach((o) => o.classList.toggle("selected", o.dataset.id === id));
+        e.preventDefault();
+      });
+      el.addEventListener("pointermove", (e) => {
+        if (!dragging) return;
+        const phone = document.getElementById("phone").getBoundingClientRect();
+        const l = layers.find((x) => x.id === id);
+        if (!l) return;
+        let left = ((e.clientX - ox - phone.left) / phone.width) * 100;
+        let top = ((e.clientY - oy - phone.top) / phone.height) * 100;
+        l.x = Math.max(0, Math.min(90, left));
+        l.y = Math.max(0, Math.min(90, top));
+        el.style.left = l.x + "%";
+        el.style.top = l.y + "%";
+        document.getElementById("posX").value = Math.round(l.x);
+        document.getElementById("posY").value = Math.round(l.y);
+      });
+      el.addEventListener("pointerup", () => { dragging = false; });
+    }
+
+    document.getElementById("scale").addEventListener("input", (e) => {
+      const l = selected();
+      if (!l || l.kind === "aud") return;
+      l.scale = +e.target.value;
+      document.getElementById("scaleVal").textContent = l.scale + "%";
+      renderOverlays();
+    });
+    document.getElementById("posX").addEventListener("change", (e) => {
+      const l = selected();
+      if (!l || l.kind === "aud") return;
+      l.x = +e.target.value; renderOverlays();
+    });
+    document.getElementById("posY").addEventListener("change", (e) => {
+      const l = selected();
+      if (!l || l.kind === "aud") return;
+      l.y = +e.target.value; renderOverlays();
+    });
+    document.getElementById("start").addEventListener("input", (e) => {
+      const l = selected();
+      if (!l || l.full) return;
+      l.start = +e.target.value;
+      document.getElementById("startVal").textContent = fmt(l.start);
+      renderTimeline();
+      renderList();
+    });
+    document.getElementById("vol").addEventListener("input", (e) => {
+      const l = selected();
+      if (!l) return;
+      l.volume = +e.target.value;
+      document.getElementById("volVal").textContent = l.volume + "%";
+    });
+
+    document.getElementById("btnAddLayer").addEventListener("click", () => {
+      document.getElementById("addLayerInput").click();
+    });
+    document.getElementById("addLayerInput").addEventListener("change", (e) => {
+      const f = e.target.files && e.target.files[0];
+      if (!f) return;
+      addLayerFromFile(f);
+      // also stash in library
+      library.push({ id: "lib-" + Date.now(), name: f.name, kind: detectKind(f) === "aud" ? "aud" : detectKind(f) === "vid" ? "vid" : "img" });
+      e.target.value = "";
+      render();
+    });
+
+    document.getElementById("libDrop").addEventListener("click", () => document.getElementById("libInput").click());
+    document.getElementById("libInput").addEventListener("change", (e) => {
+      [...(e.target.files || [])].forEach((f) => {
+        const k = detectKind(f);
+        library.push({ id: "lib-" + Date.now() + Math.random(), name: f.name, kind: k === "aud" ? "aud" : k === "vid" ? "vid" : "img" });
+      });
+      e.target.value = "";
+      renderLibrary();
+    });
+
+    document.getElementById("btnReset").addEventListener("click", resetFromKit);
+
+    resetFromKit();
+  </script>
+</body>
+</html>
