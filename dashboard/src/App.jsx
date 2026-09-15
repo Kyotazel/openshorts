@@ -934,6 +934,10 @@ function App() {
         source_end: data.sourceEnd != null ? data.sourceEnd : null,
         // 'auto' is the server default, so only a deliberate choice travels.
         layouts: data.layout && data.layout !== 'auto' ? data.layout : null,
+        // Notifikasi & kirim otomatis untuk job manual ini. Dikirim sebagai
+        // "1"/"0" karena endpoint membacanya sebagai teks form.
+        notify: data.notify ? '1' : '0',
+        auto_send: data.autoSend ? '1' : '0',
       };
 
       if (data.type === 'url') {

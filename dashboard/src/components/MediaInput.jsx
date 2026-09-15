@@ -43,6 +43,18 @@ export default function MediaInput({ onProcess, isProcessing }) {
     const [insertAd, setInsertAd] = useState(() => {
         try { return localStorage.getItem('os_insert_ad') !== '0'; } catch { return true; }
     });
+    // Notifikasi Telegram untuk job ini. Default NYALA: clipping makan 5-8
+    // menit, jadi kabar "selesai" itu yang membuat pengguna bisa meninggalkan
+    // tab. Bisa dimatikan saat memproses banyak video berturut-turut.
+    const [notify, setNotify] = useState(() => {
+        try { return localStorage.getItem('os_notify') !== '0'; } catch { return true; }
+    });
+    // Kirim otomatis ke Klip-Studio setelah clip selesai. Default MATI:
+    // mengirim berarti masuk antrian render, dan banyak orang ingin melihat
+    // hasil clipping dulu sebelum memutuskan.
+    const [autoSend, setAutoSend] = useState(() => {
+        try { return localStorage.getItem('os_auto_send') === '1'; } catch { return false; }
+    });
     const [adLibrary, setAdLibrary] = useState(null); // null = hidden (cloud/404)
     const [adBusy, setAdBusy] = useState(false);
     const adFileRef = useRef(null);
@@ -130,6 +142,8 @@ export default function MediaInput({ onProcess, isProcessing }) {
             autoHookStyle,
             layout,
             insertAd,
+            notify,
+            autoSend,
         };
         if (mode === 'url') {
             const a = sourceStart.trim();
@@ -151,6 +165,8 @@ export default function MediaInput({ onProcess, isProcessing }) {
         }
         try {
             localStorage.setItem('os_auto_hook', autoHook ? '1' : '0');
+            localStorage.setItem('os_notify', notify ? '1' : '0');
+            localStorage.setItem('os_auto_send', autoSend ? '1' : '0');
             localStorage.setItem('os_auto_hook_style', autoHookStyle);
             localStorage.setItem('os_layout', layout);
             localStorage.setItem('os_insert_ad', insertAd ? '1' : '0');
@@ -427,6 +443,28 @@ export default function MediaInput({ onProcess, isProcessing }) {
                                         <option value="outline_yellow">Outline+</option>
                                     </select>
                                 )}
+                            </div>
+                            <div className="col-span-1 sm:col-span-3 flex flex-wrap items-center justify-between gap-3 pt-3 sm:pt-1 border-t border-rule">
+                                <label className="flex items-center gap-2 text-xs text-ink2 cursor-pointer select-none">
+                                    <input
+                                        type="checkbox"
+                                        checked={notify}
+                                        onChange={(e) => setNotify(e.target.checked)}
+                                        className="w-4 h-4 shrink-0 accent-[var(--color-accent)] cursor-pointer"
+                                    />
+                                    kirim notifikasi Telegram saat clip selesai
+                                </label>
+                            </div>
+                            <div className="col-span-1 sm:col-span-3 flex flex-wrap items-center justify-between gap-3 pt-3 sm:pt-1 border-t border-rule">
+                                <label className="flex items-center gap-2 text-xs text-ink2 cursor-pointer select-none">
+                                    <input
+                                        type="checkbox"
+                                        checked={autoSend}
+                                        onChange={(e) => setAutoSend(e.target.checked)}
+                                        className="w-4 h-4 shrink-0 accent-[var(--color-accent)] cursor-pointer"
+                                    />
+                                    otomatis kirim ke Klip-Studio setelah selesai
+                                </label>
                             </div>
                             {adLibrary && (
                                 <div className="col-span-1 sm:col-span-3 pt-3 sm:pt-1 border-t border-rule space-y-2">

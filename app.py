@@ -33,6 +33,7 @@ import recut
 import layout_ranges
 import automation
 import automation_delivery
+import manual_notify
 import channel_watch
 from download_format import scrub_node_ipc_env
 
@@ -1241,6 +1242,120 @@ async def _track_proxy_usage(job_id):
             print(f"⚠️ Proxy alert failed: {e}")
 
 
+
+
+# --- Notifikasi job manual -----------------------------------------------------
+#
+# Autopilot punya alur notifikasi sendiri (ZIP masuk antrean, dsb). Ini untuk
+# job yang di-submit MANUAL dari Clip Generator, di mana pengguna mencentang
+# opsinya di form sebelum menekan generate.
+#
+# Tiga kejadian: mulai, selesai, terkirim. Ketiganya best-effort - gagal
+# mengabari tidak boleh menggagalkan job yang sedang berjalan.
+
+
+def _manual_opsi(job_id):
+    """(notify, auto_send) untuk job ini. Keduanya False kalau tidak diminta."""
+    job = jobs.get(job_id) or {}
+    opsi = job.get("manual_options") or {}
+    return (manual_notify.diminta(opsi.get("notify")),
+            manual_notify.diminta(opsi.get("auto_send")))
+
+
+async def _notify_manual_start(job_id):
+    """▶️ Job mulai dikerjakan."""
+    try:
+        notify, _ = _manual_opsi(job_id)
+        if not notify:
+            return
+        job = jobs.get(job_id) or {}
+        await manual_notify.kirim(manual_notify.pesan_mulai(
+            job.get("title") or "", float(job.get("source_minutes") or 0)))
+    except Exception as e:
+        print(f"Notifikasi mulai gagal untuk {job_id}: {e}")
+
+
+async def _notify_manual_done(job_id):
+    """✂️ Selesai, lalu 📦 terkirim kalau auto-send diminta.
+
+    Dipanggil dari finally run_job_wrapper, jadi harus tahan terhadap job yang
+    gagal: kalau status bukan completed, yang dikirim adalah pesan gagal.
+    """
+    try:
+        notify, auto_send = _manual_opsi(job_id)
+        if not notify:
+            return
+        job = jobs.get(job_id) or {}
+        clips = (job.get("result") or {}).get("clips") or []
+
+        if job.get("status") != "completed" or not clips:
+            sebab = _job_error_text(job.get("logs", []))[-300:]
+            await manual_notify.kirim(manual_notify.pesan_gagal(
+                job.get("title") or "", sebab))
+            return
+
+        total = sum(float((c or {}).get("end") or 0) - float((c or {}).get("start") or 0)
+                    for c in clips)
+        await manual_notify.kirim(manual_notify.pesan_selesai(
+            manual_notify.ringkas_judul(clips), len(clips), total, auto_send))
+
+        if auto_send:
+            await _manual_auto_send(job_id, clips)
+    except Exception as e:
+        print(f"Notifikasi selesai gagal untuk {job_id}: {e}")
+
+
+async def _manual_auto_send(job_id, clips):
+    """Kirim ZIP job ini ke Klip-Studio, retry 3x, lalu kabari hasilnya."""
+    try:
+        delivery = automation.get_settings().get("delivery") or {}
+        if not (delivery.get("url") or "").strip():
+            await manual_notify.kirim(manual_notify.pesan_gagal_kirim(
+                "Delivery URL belum diisi. Buka Settings -> Autopilot."))
+            return
+
+        # Bentuk state SENGAJA sama dengan kirim manual dari UI, supaya History
+        # dan tombol re-send memperlakukannya sama.
+        state = {
+            "job_id": job_id,
+            "status": "pending",
+            "attempts": 0,
+            "next_attempt_at": 0,
+            "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "delivered_at": None,
+            "last_error": None,
+            "zip_size": None,
+            "target": {
+                "url": delivery.get("url") or "",
+                "headers": delivery.get("headers") or [],
+                "secret": delivery.get("secret") or "",
+                "file_field": delivery.get("file_field") or "file",
+            },
+            "meta": {"clip_count": len(clips), "manual": True,
+                     "source_url": listed_source_url(job_id, rec=jobs.get(job_id)) or ""},
+        }
+        automation.outbox_put(job_id, state)
+
+        # Retry 3x dengan jeda, sama seperti autopilot. Dilakukan DI SINI, bukan
+        # diserahkan ke delivery worker, supaya pesan "terkirim" bisa menyusul
+        # pesan "selesai" dalam satu rangkaian yang bisa dibaca.
+        for percobaan in range(1, 4):
+            ok = await _automation_send(job_id, state)
+            if ok:
+                segar = automation.outbox_get(job_id) or state
+                await manual_notify.kirim(manual_notify.pesan_terkirim(
+                    len(clips), int(segar.get("zip_size") or 0)))
+                return
+            if percobaan < 3:
+                await asyncio.sleep(AUTOMATION_DELIVERY_TICK_SECONDS)
+
+        terakhir = automation.outbox_get(job_id) or {}
+        await manual_notify.kirim(manual_notify.pesan_gagal_kirim(
+            terakhir.get("last_error") or "tidak diketahui"))
+    except Exception as e:
+        print(f"Auto-send gagal untuk {job_id}: {e}")
+
+
 async def run_job_wrapper(job_id):
     """Wrapper to run job and release semaphore"""
     try:
@@ -1271,6 +1386,9 @@ async def run_job_wrapper(job_id):
         await _notify_clip_activity(job_id)
         # Autopilot: record the outcome and hand a finished job to the outbox.
         await _automation_after_job(job_id)
+        # Notifikasi job manual (kalau dicentang di form). Ditaruh SETELAH
+        # autopilot supaya job autopilot tidak pernah masuk jalur ini.
+        await _notify_manual_done(job_id)
         # Always release semaphore and mark queue task done
         _running_jobs.discard(job_id)
         concurrency_semaphore.release()
@@ -1898,6 +2016,10 @@ async def run_job(job_id, job_data):
     jobs[job_id]['status'] = 'processing'
     _append_log(job_id, "Job started by worker.")
     print(f"🎬 [run_job] Executing command for {job_id}: {' '.join(cmd)}")
+    # Dikirim DI SINI, bukan saat submit: job bisa menunggu antrian dulu kalau
+    # ada job lain berjalan, dan pesan "mulai" yang datang terlalu awal akan
+    # membuat penantian itu terasa seperti macet.
+    await _notify_manual_start(job_id)
     
     try:
         process = subprocess.Popen(
@@ -2550,6 +2672,7 @@ def _apply_job_options(env, job_id, *, layouts=None, auto_hook=None,
 
 
 def _finalize_job(*, job_id, job_output_dir, cmd, env, attestation, user_id=None,
+                   manual_options=None,
                   priority=2, reservation_id=None, watermark=False,
                   webhook_url=None, webhook_secret=None, base_url="",
                   automation_meta=None, source_url=None):
@@ -2578,6 +2701,10 @@ def _finalize_job(*, job_id, job_output_dir, cmd, env, attestation, user_id=None
     }
     if automation_meta:
         record['automation'] = automation_meta
+    if manual_options:
+        # Hanya disimpan kalau ada isinya, supaya job autopilot tidak punya
+        # field ini sama sekali - _manual_opsi menganggapnya "tidak diminta".
+        record['manual_options'] = manual_options
     jobs[job_id] = record
 
     if source_url:
@@ -2626,6 +2753,10 @@ async def process_endpoint(
     insert_ad: Optional[str] = Form(None),
     source_start: Optional[str] = Form(None),
     source_end: Optional[str] = Form(None),
+    # Notifikasi & kirim otomatis untuk job MANUAL (dipilih di form sebelum
+    # generate). Autopilot punya jalurnya sendiri dan tidak memakai ini.
+    notify: Optional[str] = Form(None),
+    auto_send: Optional[str] = Form(None),
 ):
     api_key = await resolve_gemini(request)
     if not api_key and not (llm_backend.active() and not BILLING_ENABLED):
@@ -2660,6 +2791,8 @@ async def process_endpoint(
         insert_ad = body.get("insert_ad")
         source_start = body.get("source_start")
         source_end = body.get("source_end")
+        notify = body.get("notify")
+        auto_send = body.get("auto_send")
 
     import source_trim as _strim
     try:
@@ -2908,6 +3041,9 @@ async def process_endpoint(
         webhook_secret=webhook_secret,
         base_url=api_base,
         source_url=url,
+        # Opsi notifikasi yang dicentang di form. Disimpan di record job supaya
+        # run_job (yang berjalan di task lain) bisa membacanya nanti.
+        manual_options={"notify": notify, "auto_send": auto_send},
     )
 
 def _job_view_from_disk(job_id):
