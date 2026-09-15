@@ -22,6 +22,7 @@ import LoginModal from './components/LoginModal';
 import TrialGate from './components/TrialGate';
 import AdvancedBanner from './components/AdvancedBanner';
 import HistoryTab from './components/HistoryTab';
+import AutomationPanel from './components/AutomationPanel';
 import ProfileMenu from './components/ProfileMenu';
 import Modal from './components/ui/Modal';
 import { useAuth } from './contexts/AuthContext';
@@ -1393,6 +1394,9 @@ function App() {
               {/* Self-hosted installs have no account page, so the agent
                   how-to lives here; cloud users get it (with OAuth) in Account. */}
               {!billingEnabled && <div className="mb-6"><McpConnectCard cloud={false} /></div>}
+              {/* Autopilot is a self-host, single-operator feature; the backend
+                  404s in cloud mode, so the panel is not rendered there. */}
+              {!billingEnabled && <div className="mb-6"><AutomationPanel /></div>}
               {isManaged ? (
                 <div className="card p-6 mb-2">
                   <div className="flex items-center justify-between mb-3">

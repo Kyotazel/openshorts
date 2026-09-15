@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Loader2, Download, Film, FolderOpen, Link2 } from 'lucide-react';
+import { Loader2, Download, Film, FolderOpen, Link2, Send } from 'lucide-react';
 import { apiJson } from '../lib/api';
 
 export default function HistoryTab({ billingEnabled, onReopenProject, onOpenJob }) {
@@ -22,11 +22,21 @@ function LocalHistoryList({ onOpenJob }) {
   const [opening, setOpening] = useState(null);
   const [error, setError] = useState('');
   const [openError, setOpenError] = useState('');
+  const [deliveries, setDeliveries] = useState({});
+  const [resending, setResending] = useState(null);
 
   useEffect(() => {
     apiJson('/api/jobs')
       .then((d) => setJobs(d.jobs || []))
       .catch(() => setError('could not load your jobs.'));
+    // Autopilot ZIP deliveries (self-host only; a 404 in cloud mode is fine).
+    apiJson('/api/automation')
+      .then((d) => {
+        const map = {};
+        for (const state of d.outbox || []) map[state.job_id] = state;
+        setDeliveries(map);
+      })
+      .catch(() => {});
   }, []);
 
   const handleOpen = async (jobId) => {
@@ -39,6 +49,17 @@ function LocalHistoryList({ onOpenJob }) {
       setOpenError('could not open this job. it may have been deleted.');
       setOpening(null);
     }
+  };
+
+  const handleResend = async (jobId) => {
+    if (resending) return;
+    setResending(jobId);
+    try {
+      await apiJson('/api/automation/deliveries/' + jobId + '/retry', { method: 'POST' });
+    } catch (e) {
+      setOpenError('could not re-send this delivery.');
+    }
+    setResending(null);
   };
 
   if (jobs === null && !error) {
@@ -65,37 +86,65 @@ function LocalHistoryList({ onOpenJob }) {
       )}
 
       <div className="space-y-2">
-        {(jobs || []).map((job) => (
-          <button
-            key={job.job_id}
-            type="button"
-            onClick={() => handleOpen(job.job_id)}
-            disabled={!!opening}
-            className="w-full text-left card card-hover p-4 flex flex-wrap items-center gap-3 disabled:opacity-60"
-          >
-            <div className="min-w-0 flex-1">
-              <p className="text-sm text-ink font-medium truncate" title={job.name}>
-                {job.name || job.job_id.slice(0, 8)}
-              </p>
-              {job.source_url ? (
-                <p className="text-xs text-muted truncate mt-0.5 flex items-center gap-1" title={job.source_url}>
-                  <Link2 size={12} className="shrink-0" />
-                  {job.source_url}
-                </p>
-              ) : null}
-              <p className="readout mt-1">
-                {fmtCreated(job.created)}
-                {job.clips != null ? ` · ${job.clips} clip${job.clips === 1 ? '' : 's'}` : ''}
-                {job.status ? ` · ${job.status}` : ''}
-              </p>
+        {(jobs || []).map((job) => {
+          const delivery = deliveries[job.job_id];
+          return (
+            <div
+              key={job.job_id}
+              className="w-full card card-hover p-4 flex flex-wrap items-center gap-3"
+            >
+              <button
+                type="button"
+                onClick={() => handleOpen(job.job_id)}
+                disabled={!!opening}
+                className="min-w-0 flex-1 text-left disabled:opacity-60"
+              >
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm text-ink font-medium truncate" title={job.name}>
+                    {job.name || job.job_id.slice(0, 8)}
+                  </p>
+                  {job.source_url ? (
+                    <p className="text-xs text-muted truncate mt-0.5 flex items-center gap-1" title={job.source_url}>
+                      <Link2 size={12} className="shrink-0" />
+                      {job.source_url}
+                    </p>
+                  ) : null}
+                  <p className="readout mt-1">
+                    {fmtCreated(job.created)}
+                    {job.clips != null ? ' · ' + job.clips + ' clip' + (job.clips === 1 ? '' : 's') : ''}
+                    {job.status ? ' · ' + job.status : ''}
+                  </p>
+                </div>
+                <span className="text-micro font-mono uppercase text-brass shrink-0">
+                  {opening === job.job_id
+                    ? <><Loader2 size={14} className="animate-spin inline" /> opening…</>
+                    : 'open'}
+                </span>
+              </button>
+              {delivery && (
+                <div className="flex items-center gap-2 shrink-0">
+                  <span className={delivery.status === 'sent' ? 'badge-ok'
+                    : delivery.status === 'failed' ? 'badge-danger' : 'badge-warn'}>
+                    zip {delivery.status}
+                  </span>
+                  {delivery.status !== 'sent' && (
+                    <button
+                      type="button"
+                      onClick={() => handleResend(job.job_id)}
+                      disabled={resending === job.job_id}
+                      className="btn-ghost px-3 py-1.5 text-xs"
+                      title="Send this ZIP again"
+                    >
+                      {resending === job.job_id
+                        ? <Loader2 size={13} className="animate-spin" />
+                        : <Send size={13} />} re-send
+                    </button>
+                  )}
+                </div>
+              )}
             </div>
-            <span className="text-micro font-mono uppercase text-brass shrink-0">
-              {opening === job.job_id
-                ? <><Loader2 size={14} className="animate-spin inline" /> opening…</>
-                : 'open'}
-            </span>
-          </button>
-        ))}
+          );
+        })}
       </div>
     </div>
   );

@@ -25,12 +25,15 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request, Header, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
+from fastapi.responses import HTMLResponse, FileResponse, JSONResponse, PlainTextResponse
 from starlette.background import BackgroundTask
 from pydantic import BaseModel
 from s3_uploader import upload_job_artifacts, list_all_clips, upload_actor_to_s3, list_actor_gallery, upload_video_to_gallery, list_video_gallery
 import recut
 import layout_ranges
+import automation
+import automation_delivery
+import channel_watch
 from download_format import scrub_node_ipc_env
 
 load_dotenv()
@@ -805,24 +808,30 @@ def _install_drain_signal_handler():
 
 
 def _write_resume_manifest(job_id, cmd, priority, user_id, reservation_id, watermark,
-                           webhook_url=None, webhook_secret=None, base_url=None):
+                           webhook_url=None, webhook_secret=None, base_url=None,
+                           automation=None):
     try:
         path = os.path.join(OUTPUT_DIR, job_id, _RESUME_FILE)
+        payload = {
+            "cmd": cmd, "priority": priority,
+            "user_id": None if user_id is None else str(user_id),
+            "reservation_id": reservation_id,
+            "watermark": bool(watermark), "attempts": 0,
+            # The caller's webhook must survive a redeploy: a pipeline that
+            # relies on the callback would otherwise hang forever on a job
+            # that resumed fine. The secret is the caller's own HMAC value,
+            # stored next to their video on the same disk — not a server
+            # credential (those are rebuilt from os.environ on resume).
+            "webhook_url": webhook_url,
+            "webhook_secret": webhook_secret,
+            "base_url": base_url,
+        }
+        if automation:
+            # Autopilot jobs must stay autopilot jobs across a restart: the
+            # marker is what the delivery stage looks for when they finish.
+            payload["automation"] = automation
         with open(path, "w") as f:
-            json.dump({
-                "cmd": cmd, "priority": priority,
-                "user_id": None if user_id is None else str(user_id),
-                "reservation_id": reservation_id,
-                "watermark": bool(watermark), "attempts": 0,
-                # The caller's webhook must survive a redeploy: a pipeline that
-                # relies on the callback would otherwise hang forever on a job
-                # that resumed fine. The secret is the caller's own HMAC value,
-                # stored next to their video on the same disk — not a server
-                # credential (those are rebuilt from os.environ on resume).
-                "webhook_url": webhook_url,
-                "webhook_secret": webhook_secret,
-                "base_url": base_url,
-            }, f)
+            json.dump(payload, f)
     except Exception as e:
         print(f"⚠️ Could not write resume manifest for {job_id}: {e}")
 
@@ -928,6 +937,7 @@ def _resume_interrupted_jobs() -> set:
             'webhook_url': m.get("webhook_url"),
             'webhook_secret': m.get("webhook_secret"),
             'base_url': m.get("base_url"),
+            'automation': m.get("automation"),
         }
         _enqueue_job(job_id, int(m.get("priority", 2)))
         resumed += 1
@@ -1259,6 +1269,8 @@ async def run_job_wrapper(job_id):
         await _notify_clips_ready(job_id)
         # Telegram pulse for high-signal activity (first clip / paid user).
         await _notify_clip_activity(job_id)
+        # Autopilot: record the outcome and hand a finished job to the outbox.
+        await _automation_after_job(job_id)
         # Always release semaphore and mark queue task done
         _running_jobs.discard(job_id)
         concurrency_semaphore.release()
@@ -1713,6 +1725,12 @@ async def lifespan(app: FastAPI):
     # Start worker and cleanup
     worker_task = asyncio.create_task(process_queue())
     cleanup_task = asyncio.create_task(cleanup_jobs())
+    # Autopilot (self-host only): channel watcher, daily pass, delivery outbox.
+    # Strong refs: the event loop only keeps weak ones, and a collected loop
+    # would silently stop discovering videos or delivering ZIPs.
+    if not BILLING_ENABLED:
+        _automation_loops.append(asyncio.create_task(automation_loop()))
+        _automation_loops.append(asyncio.create_task(automation_delivery_loop()))
     if BILLING_ENABLED:
         await cloud.setup_async(app, keep_reservation_ids=_resumed_reservation_ids)
         # Account erasure lives in cloud/, which can't import app.py; hand it the
@@ -2454,6 +2472,138 @@ def layout_env(requested):
     return env
 
 
+def _apply_job_options(env, job_id, *, layouts=None, auto_hook=None,
+                       auto_hook_style=None, insert_ad=None, target_clips=None,
+                       clip_min_seconds=None, clip_max_seconds=None,
+                       captions=None):
+    """Apply the per-job pipeline options to env, in place.
+
+    Shared by /api/process and the autopilot. The renderer reads these at import
+    time in the subprocess, so they must be set before Popen.
+    """
+    chosen = layout_env(layouts)
+    env.update(chosen)
+    if chosen:
+        print(f"[layouts] job={job_id} enabled={sorted(chosen)}")
+
+    if str(auto_hook).lower() in ("1", "true", "yes"):
+        env["AUTO_HOOK"] = "1"
+        from hooks import HOOK_STYLES
+        if auto_hook_style in HOOK_STYLES:
+            env["AUTO_HOOK_STYLE"] = auto_hook_style
+        print(f"[auto-hook] job={job_id} style={env.get('AUTO_HOOK_STYLE', 'classic')}")
+
+    import ad_library as _adlib
+    _ins = str(insert_ad).lower() if insert_ad is not None else ""
+    if _ins in ("1", "true", "yes"):
+        requested_ad = True
+    elif _ins in ("0", "false", "no"):
+        requested_ad = False
+    else:
+        requested_ad = None
+    env.update(_adlib.insert_ad_env(requested_ad, bool(_adlib.active_path())))
+    if env.get("INSERT_AD") == "1":
+        print(f"[ad-insert] job={job_id} active={_adlib.active_path()}")
+
+    # Manual generation controls (discussion #65): optional clip-count target
+    # and duration band, forwarded to the selection prompts via the same env
+    # overrides the A/B harness already reads (clip_selection.py). All three
+    # are honest TARGETS, not guarantees — the model may return fewer clips
+    # when the material doesn't hold them. Bad values 400 instead of silently
+    # producing something the user didn't ask for.
+    def _gen_control(raw, name, lo, hi, integer=False):
+        if raw in (None, ""):
+            return None
+        try:
+            val = float(raw)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail=f"{name} must be a number")
+        if integer and val != int(val):
+            raise HTTPException(status_code=400, detail=f"{name} must be an integer")
+        if not (lo <= val <= hi):
+            raise HTTPException(status_code=400,
+                                detail=f"{name} must be between {lo:g} and {hi:g}")
+        return int(val) if integer else val
+
+    n_clips = _gen_control(target_clips, "target_clips", 1, 15, integer=True)
+    min_secs = _gen_control(clip_min_seconds, "clip_min_seconds", 5, 175)
+    max_secs = _gen_control(clip_max_seconds, "clip_max_seconds", 10, 180)
+    if min_secs is not None and max_secs is not None and max_secs < min_secs + 5:
+        raise HTTPException(status_code=400,
+                            detail="clip_max_seconds must be at least 5s above clip_min_seconds")
+    if n_clips is not None:
+        env["CLIP_TARGET_MIN"] = env["CLIP_TARGET_MAX"] = str(n_clips)
+    if min_secs is not None:
+        env["CLIP_MIN_SECONDS"] = str(min_secs)
+    if max_secs is not None:
+        env["CLIP_MAX_SECONDS"] = str(max_secs)
+    if n_clips is not None or min_secs is not None or max_secs is not None:
+        print(f"[gen-controls] job={job_id} clips={n_clips} band={min_secs}-{max_secs}")
+
+    # captions=false: the source already carries burned-in subtitles (or the
+    # caller adds its own later), so skip the free auto-caption pass instead
+    # of stacking a second layer. Absent → the deployment default (on).
+    if captions is not None and str(captions).lower() in ("0", "false", "no"):
+        env["AUTO_CAPTIONS"] = "0"
+        print(f"[captions] job={job_id} auto-captions off")
+    return env
+
+
+def _finalize_job(*, job_id, job_output_dir, cmd, env, attestation, user_id=None,
+                  priority=2, reservation_id=None, watermark=False,
+                  webhook_url=None, webhook_secret=None, base_url="",
+                  automation_meta=None, source_url=None):
+    """Create the job record, persist what a resume needs, and enqueue it.
+
+    The single birthplace for process jobs: /api/process and the autopilot both
+    end up here, so an automated job is indistinguishable from a manual one for
+    the queue, the resume scan and History.
+    """
+    print(f"[attestation] job={job_id} ip={attestation['ip']} "
+          f"source={attestation['source']} ack=true")
+
+    record = {
+        'status': 'queued',
+        'logs': [f"Job {job_id} queued."],
+        'cmd': cmd,
+        'env': env,
+        'output_dir': job_output_dir,
+        'attestation': attestation,
+        'user_id': user_id,
+        'reservation_id': reservation_id,
+        'watermark': bool(watermark),
+        'webhook_url': webhook_url,
+        'webhook_secret': webhook_secret,
+        'base_url': base_url,
+    }
+    if automation_meta:
+        record['automation'] = automation_meta
+    jobs[job_id] = record
+
+    if source_url:
+        persist_job_source_url(job_output_dir, source_url)
+
+    # Persist the owner so recovered jobs keep their multi-tenant guard after a
+    # restart (see _recover_jobs_from_disk).
+    if user_id is not None:
+        try:
+            os.makedirs(job_output_dir, exist_ok=True)
+            with open(os.path.join(job_output_dir, ".owner"), "w") as f:
+                f.write(str(user_id))
+        except Exception as e:
+            print(f"⚠️ Could not persist job owner for {job_id}: {e}")
+
+    # Resume manifest: enough to re-run this job if the container dies mid-flight
+    # (a redeploy). No secrets — the env is rebuilt from os.environ on resume.
+    _write_resume_manifest(job_id, cmd, priority, user_id, reservation_id,
+                           watermark=watermark, webhook_url=webhook_url,
+                           webhook_secret=webhook_secret, base_url=base_url,
+                           automation=automation_meta)
+
+    _enqueue_job(job_id, priority)
+    return {"job_id": job_id, "status": "queued"}
+
+
 @app.post("/api/process")
 async def process_endpoint(
     request: Request,
@@ -2620,8 +2770,6 @@ async def process_endpoint(
     job_id = str(uuid.uuid4())
     job_output_dir = os.path.join(OUTPUT_DIR, job_id)
     os.makedirs(job_output_dir, exist_ok=True)
-    if url:
-        persist_job_source_url(job_output_dir, url)
 
     # Prepare Command
     # sys.executable, not "python": bare "python" resolves against PATH, which
@@ -2641,77 +2789,18 @@ async def process_endpoint(
     # fails instead. setdefault, so an explicit PYTHONIOENCODING still wins.
     env.setdefault("PYTHONIOENCODING", "utf-8")
 
-    # Optional layouts are per job. The renderer reads these at import time in
-    # the subprocess, so they must be set before Popen — same path WATERMARK
-    # already takes.
-    chosen = layout_env(layouts)
-    env.update(chosen)
-    if chosen:
-        print(f"[layouts] job={job_id} enabled={sorted(chosen)}")
-
-    # Auto-hook: burn each clip's Gemini hook text during the render. Off when
-    # the field is absent, so API/MCP/webhook callers keep their old output
-    # byte-for-byte; the dashboard sends an explicit value either way.
-    if str(auto_hook).lower() in ("1", "true", "yes"):
-        env["AUTO_HOOK"] = "1"
-        from hooks import HOOK_STYLES
-        if auto_hook_style in HOOK_STYLES:
-            env["AUTO_HOOK_STYLE"] = auto_hook_style
-        print(f"[auto-hook] job={job_id} style={env.get('AUTO_HOOK_STYLE', 'classic')}")
-
-    import ad_library as _adlib
-    _ins = str(insert_ad).lower() if insert_ad is not None else ""
-    if _ins in ("1", "true", "yes"):
-        requested_ad = True
-    elif _ins in ("0", "false", "no"):
-        requested_ad = False
-    else:
-        requested_ad = None
-    env.update(_adlib.insert_ad_env(requested_ad, bool(_adlib.active_path())))
-    if env.get("INSERT_AD") == "1":
-        print(f"[ad-insert] job={job_id} active={_adlib.active_path()}")
-
-    # Manual generation controls (discussion #65): optional clip-count target
-    # and duration band, forwarded to the selection prompts via the same env
-    # overrides the A/B harness already reads (clip_selection.py). All three
-    # are honest TARGETS, not guarantees — the model may return fewer clips
-    # when the material doesn't hold them. Bad values 400 instead of silently
-    # producing something the user didn't ask for.
-    def _gen_control(raw, name, lo, hi, integer=False):
-        if raw in (None, ""):
-            return None
-        try:
-            val = float(raw)
-        except (TypeError, ValueError):
-            raise HTTPException(status_code=400, detail=f"{name} must be a number")
-        if integer and val != int(val):
-            raise HTTPException(status_code=400, detail=f"{name} must be an integer")
-        if not (lo <= val <= hi):
-            raise HTTPException(status_code=400,
-                                detail=f"{name} must be between {lo:g} and {hi:g}")
-        return int(val) if integer else val
-
-    n_clips = _gen_control(target_clips, "target_clips", 1, 15, integer=True)
-    min_secs = _gen_control(clip_min_seconds, "clip_min_seconds", 5, 175)
-    max_secs = _gen_control(clip_max_seconds, "clip_max_seconds", 10, 180)
-    if min_secs is not None and max_secs is not None and max_secs < min_secs + 5:
-        raise HTTPException(status_code=400,
-                            detail="clip_max_seconds must be at least 5s above clip_min_seconds")
-    if n_clips is not None:
-        env["CLIP_TARGET_MIN"] = env["CLIP_TARGET_MAX"] = str(n_clips)
-    if min_secs is not None:
-        env["CLIP_MIN_SECONDS"] = str(min_secs)
-    if max_secs is not None:
-        env["CLIP_MAX_SECONDS"] = str(max_secs)
-    if n_clips is not None or min_secs is not None or max_secs is not None:
-        print(f"[gen-controls] job={job_id} clips={n_clips} band={min_secs}-{max_secs}")
-
-    # captions=false: the source already carries burned-in subtitles (or the
-    # caller adds its own later), so skip the free auto-caption pass instead
-    # of stacking a second layer. Absent → the deployment default (on).
-    if captions is not None and str(captions).lower() in ("0", "false", "no"):
-        env["AUTO_CAPTIONS"] = "0"
-        print(f"[captions] job={job_id} auto-captions off")
+    # Per-job pipeline options, shared verbatim with the autopilot.
+    _apply_job_options(
+        env, job_id,
+        layouts=layouts,
+        auto_hook=auto_hook,
+        auto_hook_style=auto_hook_style,
+        insert_ad=insert_ad,
+        target_clips=target_clips,
+        clip_min_seconds=clip_min_seconds,
+        clip_max_seconds=clip_max_seconds,
+        captions=captions,
+    )
 
     input_path = None
     if url:
@@ -2788,8 +2877,6 @@ async def process_endpoint(
     if output_format and output_format != "auto":
         cmd.extend(["--format", output_format])
 
-    print(f"[attestation] job={job_id} ip={attestation['ip']} source={attestation['source']} ack=true")
-
     # Meter + reserve minutes for managed users (no-op for BYOK / self-host).
     slice_seconds = (source_end - source_start) if source_start is not None else None
     user_id, priority, reservation_id, user_plan = await reserve_process_minutes(
@@ -2804,42 +2891,24 @@ async def process_endpoint(
     # caller connected to.
     api_base = os.environ.get("PUBLIC_API_URL", "").rstrip("/") or str(request.base_url).rstrip("/")
 
-    # Enqueue Job
-    jobs[job_id] = {
-        'status': 'queued',
-        'logs': [f"Job {job_id} queued."],
-        'cmd': cmd,
-        'env': env,
-        'output_dir': job_output_dir,
-        'attestation': attestation,
-        'user_id': user_id,
-        'reservation_id': reservation_id,
-        'watermark': env.get("WATERMARK") == "1",
-        'webhook_url': webhook_url,
-        'webhook_secret': webhook_secret,
-        'base_url': api_base,
-    }
-
-    # Persist the owner so recovered jobs keep their multi-tenant guard after a
-    # restart (see _recover_jobs_from_disk).
-    if user_id is not None:
-        try:
-            os.makedirs(job_output_dir, exist_ok=True)
-            with open(os.path.join(job_output_dir, ".owner"), "w") as f:
-                f.write(str(user_id))
-        except Exception as e:
-            print(f"⚠️ Could not persist job owner for {job_id}: {e}")
-
-    # Resume manifest: enough to re-run this job if the container dies mid-flight
-    # (a redeploy). No secrets — the env is rebuilt from os.environ on resume.
-    _write_resume_manifest(job_id, cmd, priority, user_id, reservation_id,
-                           watermark=jobs[job_id]['watermark'],
-                           webhook_url=webhook_url, webhook_secret=webhook_secret,
-                           base_url=api_base)
-
-    _enqueue_job(job_id, priority)
-
-    return {"job_id": job_id, "status": "queued"}
+    # Enqueue the job. _finalize_job is the single birthplace for process jobs:
+    # the autopilot calls it too, which is what makes an automated job inherit
+    # the resume manifest, History and the queue without a second code path.
+    return _finalize_job(
+        job_id=job_id,
+        job_output_dir=job_output_dir,
+        cmd=cmd,
+        env=env,
+        attestation=attestation,
+        user_id=user_id,
+        priority=priority,
+        reservation_id=reservation_id,
+        watermark=env.get("WATERMARK") == "1",
+        webhook_url=webhook_url,
+        webhook_secret=webhook_secret,
+        base_url=api_base,
+        source_url=url,
+    )
 
 def _job_view_from_disk(job_id):
     """What the disk says about a job this instance does not hold in memory.
@@ -6539,3 +6608,629 @@ async def saasshorts_voices(
         ],
         "source": "defaults",
     }
+
+# --- Autopilot (self-host) -----------------------------------------------------
+# Watch YouTube channels, park their new uploads in a file queue, turn the queue
+# into ordinary process jobs once a day at the configured local hour, and POST
+# each finished job's ZIP to the operator's API.
+#
+# Cloud mode is excluded on purpose: this is a single-operator feature, the
+# queue is a file on the server's disk, and the cloud app is multi-tenant.
+
+AUTOMATION_TICK_SECONDS = 30
+AUTOMATION_DELIVERY_TICK_SECONDS = 300
+AUTOMATION_RETRY_DELAY_SECONDS = 1800
+AUTOMATION_MAX_ATTEMPTS = 3
+AUTOMATION_LEASE_RENEW_SECONDS = 12 * 3600
+AUTOMATION_DELIVERY_TIMEOUT = float(
+    os.environ.get("AUTOMATION_DELIVERY_TIMEOUT", "600"))
+
+_automation_pass_lock = asyncio.Lock()
+_automation_tasks: set = set()
+_automation_loops: list = []          # strong refs to the two background loops
+_automation_state = {"last_poll": 0.0, "last_lease": 0.0}
+
+
+class AutomationSourceError(Exception):
+    """A pending video that cannot (yet) become a job.
+
+    permanent marks a source that fails the same way on every retry — too
+    short, private, removed — so the queue stops burning attempts on it.
+    """
+
+    def __init__(self, message, permanent=False):
+        super().__init__(message)
+        self.permanent = permanent
+
+
+def _automation_available() -> bool:
+    return not BILLING_ENABLED
+
+
+def _automation_base_url() -> str:
+    return os.environ.get("PUBLIC_API_URL", "").rstrip("/")
+
+
+def _automation_callback_url() -> str:
+    base = _automation_base_url()
+    return f"{base}/api/automation/youtube/callback" if base else ""
+
+
+def _parse_iso(value):
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+def _published_after(published, created_at) -> bool:
+    """True when a feed entry is newer than the subscription.
+
+    Enforces 'only videos published after subscribing': the RSS feed lists the
+    15 most recent uploads, and without this the first poll would backfill the
+    whole channel.
+    """
+    pub = _parse_iso(published)
+    created = _parse_iso(created_at)
+    if pub is None:
+        return False
+    if created is None:
+        return True
+    return pub >= created
+
+
+def _automation_spawn(coro):
+    task = asyncio.create_task(coro)
+    _automation_tasks.add(task)
+    task.add_done_callback(_automation_tasks.discard)
+    return task
+
+
+async def _automation_submit_pending(item):
+    """Submit one pending video as a normal job, recording the outcome."""
+    video_id = item.get("video_id")
+    guard = automation.find_pending(video_id)
+    if not guard or guard.get("status") in ("queued", "done"):
+        return
+    try:
+        result = await _automation_build_job(item)
+    except AutomationSourceError as e:
+        automation.mark_pending_failure(video_id, str(e), permanent=e.permanent)
+        print(f"Autopilot: skipped {video_id}: {e}")
+    except Exception as e:
+        automation.mark_pending_failure(
+            video_id, f"{type(e).__name__}: {e}",
+            retry_after_seconds=AUTOMATION_RETRY_DELAY_SECONDS)
+        print(f"Autopilot: submit failed for {video_id}: {e}")
+    else:
+        automation.mark_queued(video_id, result["job_id"])
+        print(f"Autopilot: queued {video_id} as {result['job_id']}")
+
+
+async def _automation_build_job(item):
+    """Probe the source, then create and enqueue the job."""
+    url = item.get("url") or ""
+    if not url:
+        raise AutomationSourceError("pending item has no URL", permanent=True)
+
+    # Same gates as a manual URL submit, minus the interactive confirmation: a
+    # fresh upload may only offer 360p for its first minutes, which the
+    # dashboard would ask the user to accept. Here it becomes a retry.
+    probe = await _probe_youtube_quality(url)
+    duration = int(probe.get("duration") or 0)
+    if MIN_SOURCE_SECONDS > 0 and 0 < duration < MIN_SOURCE_SECONDS:
+        raise AutomationSourceError(
+            f"source is only {duration}s long (minimum {MIN_SOURCE_SECONDS}s)",
+            permanent=True)
+    if QUALITY_GATE_MIN_HEIGHT > 0:
+        max_height = int(probe.get("max_height") or 0)
+        if 0 < max_height < QUALITY_GATE_MIN_HEIGHT:
+            raise AutomationSourceError(
+                f"only {max_height}p is available right now "
+                f"(needs {QUALITY_GATE_MIN_HEIGHT}p)")
+
+    job_id = str(uuid.uuid4())
+    job_output_dir = os.path.join(OUTPUT_DIR, job_id)
+    os.makedirs(job_output_dir, exist_ok=True)
+
+    cmd = [sys.executable, "-u", "main.py", "-u", url, "--keep-original",
+           "-o", job_output_dir]
+    env = os.environ.copy()
+    scrub_node_ipc_env(env)
+    env.setdefault("PYTHONIOENCODING", "utf-8")
+    # Everything defaults to the deployment's own pipeline configuration, which
+    # is what a manual submit with no advanced options gets too.
+    _apply_job_options(env, job_id)
+
+    attestation = {
+        "acknowledged": True,
+        "ip": "autopilot",
+        "user_agent": "OpenShorts-Automation/1.0",
+        "timestamp": time.time(),
+        "source": "automation",
+    }
+    meta = {
+        "video_id": item.get("video_id"),
+        "channel_id": item.get("channel_id"),
+        "channel_title": item.get("channel_title"),
+        "source_url": url,
+    }
+    return _finalize_job(
+        job_id=job_id, job_output_dir=job_output_dir, cmd=cmd, env=env,
+        attestation=attestation, base_url=_automation_base_url(),
+        automation_meta=meta, source_url=url)
+
+
+async def _automation_daily_pass():
+    """Submit everything waiting, then remember that today's run happened.
+
+    The pass is idempotent: an item already queued is skipped, and the date is
+    written only after the loop, so a PM2 restart in the middle resumes the rest
+    of the batch instead of waiting for tomorrow.
+    """
+    async with _automation_pass_lock:
+        settings = automation.get_settings()
+        local = automation.local_now(settings)
+        items = automation.pending_for_run()
+        if items:
+            print(f"Autopilot: daily pass for {local.date().isoformat()} — "
+                  f"{len(items)} video(s) waiting.")
+        for item in items:
+            await _automation_submit_pending(item)
+        automation.set_last_run(local.date().isoformat())
+
+
+async def _automation_poll_channels(settings):
+    """RSS fallback: catch anything WebSub did not deliver."""
+    subs = automation.list_subscriptions()
+    if not subs:
+        return
+    loop = asyncio.get_event_loop()
+
+    def _fetch():
+        found = []
+        for sub in subs:
+            try:
+                feed = channel_watch.fetch_feed(sub.get("channel_id") or "")
+            except Exception as e:
+                print(f"Autopilot: feed fetch failed for "
+                      f"{sub.get('title') or sub.get('channel_id')}: {e}")
+                continue
+            for entry in feed.get("entries", []):
+                if not _published_after(entry.get("published"), sub.get("created_at")):
+                    continue
+                found.append({**entry, "channel_title":
+                              sub.get("title") or feed.get("title") or ""})
+        return found
+
+    added = 0
+    for entry in await loop.run_in_executor(None, _fetch):
+        _, created = automation.add_pending(entry)
+        added += int(created)
+    if added:
+        print(f"Autopilot: RSS found {added} new video(s).")
+
+
+async def _automation_renew_leases(settings):
+    """Re-register WebSub topics before their lease expires."""
+    callback = _automation_callback_url()
+    if not callback:
+        print("Autopilot: PUBLIC_API_URL is not set — WebSub callbacks are off; "
+              "only the RSS fallback will detect new videos.")
+        return
+    loop = asyncio.get_event_loop()
+    now = datetime.now(timezone.utc)
+    for sub in automation.list_subscriptions():
+        expires = _parse_iso(sub.get("lease_expires_at"))
+        if expires and (expires - now).total_seconds() > 24 * 3600:
+            continue
+        ok = await loop.run_in_executor(
+            None, channel_watch.websub_subscribe, callback, sub["channel_id"])
+        automation.update_subscription(
+            sub["id"],
+            lease_expires_at=(now + timedelta(days=5)).isoformat(timespec="seconds"),
+            status="active" if ok else "unverified")
+        print(f"Autopilot: WebSub renew for {sub.get('title')}: "
+              f"{'ok' if ok else 'failed'}")
+
+
+async def automation_loop():
+    """Daily pass, retry sweep, RSS fallback and WebSub lease renewal."""
+    print("Autopilot: scheduler started.")
+    while True:
+        try:
+            await asyncio.sleep(AUTOMATION_TICK_SECONDS)
+            if not _automation_available():
+                continue
+            settings = automation.get_settings()
+            if not settings.get("enabled"):
+                continue
+            if automation.is_due(settings):
+                await _automation_daily_pass()
+            for item in automation.pending_due_retries():
+                await _automation_submit_pending(item)
+            if automation.should_poll(_automation_state["last_poll"], settings):
+                _automation_state["last_poll"] = time.time()
+                await _automation_poll_channels(settings)
+            if time.time() - _automation_state["last_lease"] >= AUTOMATION_LEASE_RENEW_SECONDS:
+                _automation_state["last_lease"] = time.time()
+                await _automation_renew_leases(settings)
+        except asyncio.CancelledError:
+            return
+        except Exception as e:
+            print(f"Autopilot: scheduler error: {e}")
+
+
+def _automation_clip_files(job_id, job):
+    """Resolve the current canonical file for every clip of a finished job."""
+    output_dir = os.path.join(OUTPUT_DIR, job_id)
+    json_files = glob.glob(os.path.join(output_dir, "*_metadata.json"))
+    data = {}
+    metadata_path = None
+    base_name = None
+    if json_files:
+        metadata_path = json_files[0]
+        base_name = os.path.basename(metadata_path).replace("_metadata.json", "")
+        try:
+            with open(metadata_path, encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception as e:
+            print(f"Autopilot: unreadable metadata for {job_id}: {e}")
+    clips = data.get("shorts") or []
+    mem = ((job or {}).get("result") or {}).get("clips") or []
+    files = []
+    for i, clip in enumerate(clips):
+        url = (mem[i] or {}).get("video_url") if i < len(mem) else None
+        url = url or (clip or {}).get("video_url")
+        filename = os.path.basename(url.split("/")[-1]) if url else (
+            _canonical_clip_file(output_dir, base_name, i) if base_name else None)
+        path = os.path.join(output_dir, filename) if filename else None
+        if path and os.path.exists(path):
+            files.append((i, path))
+    return files, clips, metadata_path
+
+
+def _automation_prepare_zip(job_id, state):
+    """Build the ZIP if it is not already on disk. Returns (path, error)."""
+    zip_path = automation.outbox_zip_path(job_id)
+    if os.path.exists(zip_path) and os.path.getsize(zip_path) > 0:
+        return zip_path, None
+    files, clips, metadata_path = _automation_clip_files(job_id, jobs.get(job_id) or {})
+    if not files:
+        return None, "no clip files left on disk"
+    automation_delivery.build_zip(zip_path, files, clips, metadata_path)
+    return zip_path, None
+
+
+def _automation_outbox_fields(state):
+    meta = state.get("meta") or {}
+    return {
+        "job_id": state.get("job_id"),
+        "video_id": meta.get("video_id"),
+        "video_url": meta.get("source_url"),
+        "channel_title": meta.get("channel_title"),
+        "clip_count": meta.get("clip_count"),
+    }
+
+
+async def _automation_send(job_id, state):
+    """One delivery attempt; updates the outbox state in place."""
+    try:
+        state = dict(state or automation.outbox_get(job_id) or {})
+        state["job_id"] = job_id
+        attempts = int(state.get("attempts") or 0) + 1
+        state["attempts"] = attempts
+        state["status"] = "sending"
+        target = state.get("target") or {}
+        loop = asyncio.get_event_loop()
+
+        zip_path, error = await loop.run_in_executor(
+            None, _automation_prepare_zip, job_id, state)
+        if error:
+            ok, detail = False, error
+        else:
+            ok, detail = await automation_delivery.post_zip(
+                target.get("url") or "", zip_path,
+                file_field=target.get("file_field") or "file",
+                headers=target.get("headers") or [],
+                secret=target.get("secret") or "",
+                fields=_automation_outbox_fields(state),
+                timeout=AUTOMATION_DELIVERY_TIMEOUT)
+
+        if ok:
+            state.update(
+                status="sent", last_error=None, next_attempt_at=0,
+                delivered_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                zip_size=(os.path.getsize(zip_path)
+                          if zip_path and os.path.exists(zip_path) else None))
+            automation.outbox_put(job_id, state)
+            print(f"Autopilot: delivered {job_id} (attempt {attempts}).")
+            return True
+
+        state["last_error"] = (detail or "delivery failed")[:500]
+        if attempts >= AUTOMATION_MAX_ATTEMPTS:
+            state["status"] = "failed"
+            state["next_attempt_at"] = 0
+            print(f"Autopilot: delivery failed for {job_id} after {attempts} "
+                  f"attempts: {state['last_error']}")
+        else:
+            state["status"] = "pending"
+            state["next_attempt_at"] = time.time() + AUTOMATION_DELIVERY_TICK_SECONDS
+            print(f"Autopilot: delivery attempt {attempts} for {job_id} failed: "
+                  f"{state['last_error']}")
+        automation.outbox_put(job_id, state)
+        return False
+    except Exception as e:
+        print(f"Autopilot: delivery worker crashed for {job_id}: {e}")
+        return False
+
+
+async def automation_delivery_loop():
+    """Retry the outbox until each entry is sent or out of attempts."""
+    print("Autopilot: delivery worker started.")
+    while True:
+        try:
+            if _automation_available():
+                for state in automation.outbox_due():
+                    await _automation_send(state.get("job_id"), state)
+        except asyncio.CancelledError:
+            return
+        except Exception as e:
+            print(f"Autopilot: delivery worker error: {e}")
+        await asyncio.sleep(AUTOMATION_DELIVERY_TICK_SECONDS)
+
+
+async def _automation_after_job(job_id):
+    """Terminal hook: update the queue and hand completed jobs to the outbox.
+
+    The outbox state is written before the send is spawned, so a restart between
+    the two still finds the job and re-sends it — this is what keeps an
+    automated run from silently losing its ZIP. Never raises: it runs inside
+    run_job_wrapper's finally, next to the semaphore release.
+    """
+    try:
+        job = jobs.get(job_id) or {}
+        meta = job.get("automation")
+        if not meta:
+            return
+        if job.get("status") != "completed":
+            automation.mark_job_finished(
+                job_id, False, _job_error_text(job.get("logs", []))[-300:])
+            return
+        clips = (job.get("result") or {}).get("clips") or []
+        if not clips:
+            automation.mark_job_finished(job_id, False, "no clips produced")
+            return
+        automation.mark_job_finished(job_id, True)
+
+        delivery = (automation.get_settings().get("delivery") or {})
+        state = {
+            "job_id": job_id,
+            "status": "pending",
+            "attempts": 0,
+            "next_attempt_at": 0,
+            "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "delivered_at": None,
+            "last_error": None,
+            "zip_size": None,
+            # Frozen at completion time: editing the dashboard settings later
+            # must not change where an in-flight job is sent.
+            "target": {
+                "url": delivery.get("url") or "",
+                "headers": delivery.get("headers") or [],
+                "secret": delivery.get("secret") or "",
+                "file_field": delivery.get("file_field") or "file",
+            },
+            "meta": {**meta, "clip_count": len(clips),
+                     "output_dir": job.get("output_dir") or ""},
+        }
+        automation.outbox_put(job_id, state)
+        _automation_spawn(_automation_send(job_id, state))
+    except Exception as e:
+        print(f"Autopilot: post-job hook failed for {job_id}: {e}")
+
+
+# --- Autopilot API -------------------------------------------------------------
+
+class AutomationChannelRequest(BaseModel):
+    query: str
+
+
+class AutomationSettingsRequest(BaseModel):
+    enabled: Optional[bool] = None
+    run_hour: Optional[int] = None
+    timezone: Optional[str] = None
+    delivery: Optional[Dict[str, Any]] = None
+
+
+def _automation_settings_view(settings):
+    """Settings as the browser may see them: the secret never round-trips."""
+    delivery = dict(settings.get("delivery") or {})
+    secret_set = bool(delivery.get("secret"))
+    delivery["secret"] = ""
+    return {**settings, "delivery": delivery}, secret_set
+
+
+@app.get("/api/automation")
+async def automation_status():
+    if not _automation_available():
+        raise HTTPException(status_code=404, detail="Not found")
+    settings = automation.get_settings()
+    view, secret_set = _automation_settings_view(settings)
+    return {
+        "settings": view,
+        "secret_set": secret_set,
+        "callback_url": _automation_callback_url(),
+        "subscriptions": automation.list_subscriptions(),
+        "pending": automation.list_pending(),
+        "outbox": automation.outbox_list(),
+        "schedule": automation.get_schedule(),
+        "local_today": automation.local_now(settings).date().isoformat(),
+    }
+
+
+@app.post("/api/automation/settings")
+async def automation_save_settings(req: AutomationSettingsRequest):
+    if not _automation_available():
+        raise HTTPException(status_code=404, detail="Not found")
+    patch = req.model_dump(exclude_none=True)
+    # An absent secret means "keep the stored one"; an explicit "" clears it.
+    if "delivery" in patch and "secret" not in (patch["delivery"] or {}):
+        patch["delivery"]["secret"] = automation.get_settings()["delivery"]["secret"]
+    try:
+        settings = automation.save_settings(patch)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    view, secret_set = _automation_settings_view(settings)
+    return {"settings": view, "secret_set": secret_set}
+
+
+@app.post("/api/automation/channels")
+async def automation_add_channel(req: AutomationChannelRequest):
+    if not _automation_available():
+        raise HTTPException(status_code=404, detail="Not found")
+    query = (req.query or "").strip()
+    if not query:
+        raise HTTPException(status_code=400, detail="Paste a channel URL or @handle")
+    loop = asyncio.get_event_loop()
+    try:
+        info = await loop.run_in_executor(None, channel_watch.resolve, query)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(status_code=502,
+                            detail=f"Could not reach YouTube: {e}") from e
+
+    existing = automation.find_subscription(channel_id=info["channel_id"])
+    if existing:
+        return {"subscription": existing, "created": False}
+
+    callback = _automation_callback_url()
+    websub_ok = False
+    if callback:
+        try:
+            websub_ok = await loop.run_in_executor(
+                None, channel_watch.websub_subscribe, callback, info["channel_id"])
+        except Exception as e:
+            print(f"Autopilot: WebSub subscribe failed: {e}")
+    sub = automation.add_subscription(
+        info["channel_id"], title=info.get("title") or "",
+        handle=info.get("handle") or "",
+        lease_expires_at=((datetime.now(timezone.utc) + timedelta(days=5))
+                          .isoformat(timespec="seconds") if websub_ok else None))
+    if not websub_ok:
+        automation.update_subscription(sub["id"], status="rss-only")
+    return {"subscription": automation.find_subscription(sub_id=sub["id"]),
+            "created": True, "websub": websub_ok, "callback_url": callback}
+
+
+@app.delete("/api/automation/channels/{sub_id}")
+async def automation_remove_channel(sub_id: str):
+    if not _automation_available():
+        raise HTTPException(status_code=404, detail="Not found")
+    sub = automation.find_subscription(sub_id=sub_id)
+    if not sub:
+        raise HTTPException(status_code=404, detail="Channel not found")
+    callback = _automation_callback_url()
+    if callback:
+        try:
+            await asyncio.get_event_loop().run_in_executor(
+                None, channel_watch.websub_unsubscribe, callback,
+                sub["channel_id"])
+        except Exception as e:
+            print(f"Autopilot: WebSub unsubscribe failed: {e}")
+    automation.remove_subscription(sub_id)
+    return {"removed": sub_id}
+
+
+@app.post("/api/automation/run-now")
+async def automation_run_now():
+    if not _automation_available():
+        raise HTTPException(status_code=404, detail="Not found")
+    _automation_spawn(_automation_daily_pass())
+    return {"status": "started", "pending": len(automation.pending_for_run())}
+
+
+@app.post("/api/automation/pending/{video_id}/retry")
+async def automation_retry_pending(video_id: str):
+    if not _automation_available():
+        raise HTTPException(status_code=404, detail="Not found")
+    if not automation.find_pending(video_id):
+        raise HTTPException(status_code=404, detail="Video not found")
+    automation.reset_pending(video_id)
+    _automation_spawn(_automation_submit_pending(automation.find_pending(video_id)))
+    return {"status": "started", "video_id": video_id}
+
+
+@app.post("/api/automation/deliveries/{job_id}/retry")
+async def automation_retry_delivery(job_id: str):
+    if not _automation_available():
+        raise HTTPException(status_code=404, detail="Not found")
+    state = automation.outbox_get(job_id)
+    if not state:
+        raise HTTPException(status_code=404, detail="No delivery found for that job")
+    state.update(status="pending", attempts=0, next_attempt_at=0, last_error=None)
+    automation.outbox_put(job_id, state)
+    _automation_spawn(_automation_send(job_id, state))
+    return {"status": "started", "job_id": job_id}
+
+
+@app.get("/api/automation/youtube/callback")
+async def automation_websub_verify(request: Request):
+    """WebSub verification: echo hub.challenge and absorb the real lease."""
+    challenge = request.query_params.get("hub.challenge") or ""
+    topic = request.query_params.get("hub.topic") or ""
+    mode = request.query_params.get("hub.mode") or ""
+    lease = request.query_params.get("hub.lease_seconds")
+    if mode == "subscribe" and topic:
+        channel_id = channel_watch.extract_channel_id(topic)
+        sub = automation.find_subscription(channel_id=channel_id) if channel_id else None
+        if sub:
+            expires = None
+            if lease:
+                try:
+                    expires = (datetime.now(timezone.utc) + timedelta(seconds=int(lease))
+                               ).isoformat(timespec="seconds")
+                except (TypeError, ValueError):
+                    expires = None
+            automation.update_subscription(
+                sub["id"], status="active",
+                **({"lease_expires_at": expires} if expires else {}))
+    if not challenge:
+        raise HTTPException(status_code=400, detail="missing hub.challenge")
+    return PlainTextResponse(challenge)
+
+
+@app.post("/api/automation/youtube/callback")
+async def automation_websub_notify(request: Request):
+    """WebSub notification: park any new video for the daily pass."""
+    mode = request.query_params.get("hub.mode") or ""
+    topic = request.query_params.get("hub.topic") or ""
+    if mode == "denied":
+        print(f"Autopilot: hub denied the subscription for {topic}")
+        return {"ok": True}
+    raw = await request.body()
+    try:
+        parsed = channel_watch.parse_feed(raw.decode("utf-8", "replace"))
+    except Exception as e:
+        print(f"Autopilot: unreadable WebSub payload: {e}")
+        return {"ok": True}
+    added = 0
+    for entry in parsed.get("entries", []):
+        channel_id = entry.get("channel_id") or channel_watch.extract_channel_id(topic)
+        sub = automation.find_subscription(channel_id=channel_id) if channel_id else None
+        if not sub:
+            continue
+        if not _published_after(entry.get("published"), sub.get("created_at")):
+            continue
+        _, created = automation.add_pending(
+            {**entry, "channel_title": sub.get("title") or parsed.get("title") or ""})
+        added += int(created)
+    if added:
+        print(f"Autopilot: WebSub push added {added} new video(s).")
+    return {"ok": True, "added": added}
