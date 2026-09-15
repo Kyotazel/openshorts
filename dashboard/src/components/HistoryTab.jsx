@@ -62,6 +62,30 @@ function LocalHistoryList({ onOpenJob }) {
     setResending(null);
   };
 
+  // Kirim job yang BELUM punya catatan kirim sama sekali.
+  //
+  // Job yang diproses manual dari dashboard tidak masuk outbox autopilot, jadi
+  // satu-satunya cara mengirimnya dulu adalah skrip Python di terminal. Tombol
+  // ini memanggil endpoint yang membangun ZIP-nya saat itu juga.
+  const handleSend = async (jobId) => {
+    if (resending) return;
+    setResending(jobId);
+    setOpenError('');
+    try {
+      await apiJson('/api/automation/send/' + jobId, { method: 'POST' });
+      // Muat ulang daftar kirim supaya status "zip pending" langsung muncul.
+      const d = await apiJson('/api/automation');
+      const map = {};
+      for (const state of d.outbox || []) map[state.job_id] = state;
+      setDeliveries(map);
+    } catch (e) {
+      // Pesan dari backend lebih berguna daripada kalimat umum: ia menyebut
+      // apakah masalahnya di delivery URL, job belum selesai, atau lainnya.
+      setOpenError(e?.detail || 'could not send this job to Klip-Studio.');
+    }
+    setResending(null);
+  };
+
   if (jobs === null && !error) {
     return <div className="flex justify-center py-20"><Loader2 className="animate-spin text-brass" /></div>;
   }
@@ -121,6 +145,19 @@ function LocalHistoryList({ onOpenJob }) {
                     : 'open'}
                 </span>
               </button>
+              {!delivery && job.status === 'completed' && (
+                <button
+                  type="button"
+                  onClick={() => handleSend(job.job_id)}
+                  disabled={resending === job.job_id}
+                  className="btn-ghost px-3 py-1.5 text-xs shrink-0"
+                  title="Build a ZIP from this job and send it to Klip-Studio"
+                >
+                  {resending === job.job_id
+                    ? <Loader2 size={13} className="animate-spin" />
+                    : <Send size={13} />} send to Klip-Studio
+                </button>
+              )}
               {delivery && (
                 <div className="flex items-center gap-2 shrink-0">
                   <span className={delivery.status === 'sent' ? 'badge-ok'

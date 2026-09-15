@@ -142,6 +142,36 @@ def cmd_kirim(args) -> int:
     return 1
 
 
+def cmd_kirim_job(args) -> int:
+    """Kirim hasil SATU job apa pun, termasuk yang diproses manual.
+
+    Berbeda dari 'kirim', yang bekerja dari outbox: perintah ini membangun ZIP
+    saat itu juga, jadi ia bisa dipakai untuk job yang tidak pernah lewat
+    autopilot. Endpoint-nya sama dengan tombol "send to Klip-Studio" di UI.
+    """
+    import httpx
+    base_url = os.environ.get("OPENSHORTS_API_URL", "http://127.0.0.1:8000").rstrip("/")
+    try:
+        r = httpx.post(f"{base_url}/api/automation/send/{args.job_id}", timeout=60)
+    except Exception as e:
+        print(f"Tidak bisa menghubungi {base_url}: {e}", file=sys.stderr)
+        return 1
+    if r.status_code >= 300:
+        # Pesan dari backend sudah menjelaskan sebabnya (delivery URL kosong,
+        # job belum selesai, dsb) - jadi diteruskan apa adanya.
+        detail = ""
+        try:
+            detail = r.json().get("detail") or ""
+        except Exception:
+            detail = r.text[:200]
+        print(f"GAGAL ({r.status_code}): {detail}", file=sys.stderr)
+        return 1
+    data = r.json()
+    print(f"Terkirim: {args.job_id} ({data.get('clip_count')} klip)")
+    print("Pantau hasilnya dengan: python -m cli.automation status")
+    return 0
+
+
 def cmd_kirim_semua(_args) -> int:
     due = [o for o in automation.outbox_list() if o.get("status") != "sent"]
     if not due:
@@ -175,6 +205,9 @@ def main() -> int:
     p = sub.add_parser("kirim", help="kirim satu ZIP ke Klip-Studio")
     p.add_argument("job_id")
 
+    p = sub.add_parser("kirim-job", help="kirim hasil satu job apa pun (termasuk manual)")
+    p.add_argument("job_id")
+
     sub.add_parser("kirim-semua", help="kirim semua ZIP yang belum terkirim")
 
     args = parser.parse_args()
@@ -182,6 +215,7 @@ def main() -> int:
         "status": cmd_status,
         "build-zip": cmd_build_zip,
         "kirim": cmd_kirim,
+        "kirim-job": cmd_kirim_job,
         "kirim-semua": cmd_kirim_semua,
     }[args.command](args)
 

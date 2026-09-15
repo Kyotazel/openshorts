@@ -7178,6 +7178,77 @@ async def automation_retry_delivery(job_id: str):
     automation.outbox_put(job_id, state)
     _automation_spawn(_automation_send(job_id, state))
     return {"status": "started", "job_id": job_id}
+@app.post("/api/automation/send/{job_id}")
+async def automation_send_job(job_id: str):
+    """Kirim hasil SATU job ke Klip-Studio, tanpa lewat autopilot.
+
+    KENAPA ADA: endpoint kirim yang sudah ada bekerja dari OUTBOX, dan outbox
+    hanya terisi oleh autopilot (lihat _automation_after_job, yang berhenti
+    lebih awal kalau job tidak punya meta automation). Akibatnya job yang
+    diproses MANUAL dari dashboard tidak pernah bisa dikirim dari UI -
+    satu-satunya jalan adalah skrip Python di terminal.
+
+    Endpoint ini menutup celah itu: ia membangun ZIP dari berkas hasil job
+    (memakai build_zip yang SAMA dengan autopilot, jadi captions.json ikut),
+    lalu menyerahkannya ke outbox supaya retry dan riwayatnya tetap sama.
+
+    Gate TIDAK dilewati: penjaga SSRF URL dan penandatanganan HMAC tetap
+    dijalankan oleh _automation_send seperti biasa.
+    """
+    if not _automation_available():
+        raise HTTPException(status_code=404, detail="Not found")
+
+    job = jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.get("status") != "completed":
+        # Job yang belum selesai tidak punya berkas klip; menolaknya di sini
+        # memberi pesan yang jelas alih-alih ZIP kosong yang gagal jauh nanti.
+        raise HTTPException(
+            status_code=409,
+            detail=f"Job belum selesai (status: {job.get('status')}). "
+                   "Tunggu sampai selesai, lalu coba lagi.")
+
+    delivery = automation.get_settings().get("delivery") or {}
+    if not (delivery.get("url") or "").strip():
+        raise HTTPException(
+            status_code=400,
+            detail="Delivery URL belum diisi. Buka Settings -> Autopilot.")
+
+    clips = (job.get("result") or {}).get("clips") or []
+    if not clips:
+        raise HTTPException(status_code=409, detail="Job ini tidak menghasilkan klip.")
+
+    # Bentuk state SENGAJA identik dengan _automation_after_job supaya endpoint
+    # retry dan tampilan riwayat tidak perlu tahu dari mana state ini berasal.
+    state = {
+        "job_id": job_id,
+        "status": "pending",
+        "attempts": 0,
+        "next_attempt_at": 0,
+        "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "delivered_at": None,
+        "last_error": None,
+        "zip_size": None,
+        "target": {
+            "url": delivery.get("url") or "",
+            "headers": delivery.get("headers") or [],
+            "secret": delivery.get("secret") or "",
+            "file_field": delivery.get("file_field") or "file",
+        },
+        "meta": {
+            # job manual tidak punya meta automation, jadi dibangun di sini.
+            "clip_count": len(clips),
+            "output_dir": job.get("output_dir") or "",
+            # Lewat helper, bukan job["source_url"]: URL tidak disimpan sebagai
+            # field record, ia tersebar di cmd / metadata / berkas .source_url.
+            "source_url": listed_source_url(job_id, rec=job) or "",
+            "manual": True,
+        },
+    }
+    automation.outbox_put(job_id, state)
+    _automation_spawn(_automation_send(job_id, state))
+    return {"status": "started", "job_id": job_id, "clip_count": len(clips)}
 
 
 @app.get("/api/automation/youtube/callback")
