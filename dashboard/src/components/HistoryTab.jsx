@@ -164,19 +164,24 @@ function LocalHistoryList({ onOpenJob }) {
                     : delivery.status === 'failed' ? 'badge-danger' : 'badge-warn'}>
                     zip {delivery.status}
                   </span>
-                  {delivery.status !== 'sent' && (
-                    <button
-                      type="button"
-                      onClick={() => handleResend(job.job_id)}
-                      disabled={resending === job.job_id}
-                      className="btn-ghost px-3 py-1.5 text-xs"
-                      title="Send this ZIP again"
-                    >
-                      {resending === job.job_id
-                        ? <Loader2 size={13} className="animate-spin" />
-                        : <Send size={13} />} re-send
-                    </button>
-                  )}
+                  {/* Selalu tersedia, termasuk setelah "sent": kadang batch di
+                      Klip-Studio perlu dikirim ulang (mis. gagal di sana setelah
+                      ZIP-nya diterima). */}
+                  <button
+                    type="button"
+                    onClick={() => handleResend(job.job_id)}
+                    disabled={resending === job.job_id}
+                    className="btn-ghost px-3 py-1.5 text-xs"
+                    title={
+                      delivery.status === 'sent'
+                        ? 'Kirim ulang. Membuat batch BARU di Klip-Studio - klip bisa tayang dua kali.'
+                        : 'Send this ZIP again'
+                    }
+                  >
+                    {resending === job.job_id
+                      ? <Loader2 size={13} className="animate-spin" />
+                      : <Send size={13} />} re-send
+                  </button>
                 </div>
               )}
             </div>
