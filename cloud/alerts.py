@@ -82,6 +82,22 @@ def _cooldown_ok(kind: str) -> bool:
 TELEGRAM_PREFIX = "OPENSHORTS ✂️ - "
 
 
+
+
+def telegram_disabled() -> bool:
+    """Sakelar mati notifikasi, lewat TELEGRAM_DISABLED.
+
+    KENAPA ADA: setiap uji yang mengirim ZIP lewat endpoint sungguhan memicu
+    pesan ke chat Telegram yang nyata. Saat menguji berulang kali, chat admin
+    penuh pesan uji dan pesan sungguhan tenggelam di antaranya.
+
+    Dinyalakan selama pengujian, dimatikan lagi saat ingin melihat notifikasi
+    sungguhan. Terpisah dari token: token yang kosong sudah membuat semuanya
+    tidak mengirim apa pun.
+    """
+    return os.environ.get("TELEGRAM_DISABLED", "").strip().lower() in (
+        "1", "true", "yes")
+
 async def send_telegram(text: str, *, raise_errors: bool = False):
     """Push a plain-text message to the admin's Telegram chat. No-op if unset.
 
@@ -89,6 +105,9 @@ async def send_telegram(text: str, *, raise_errors: bool = False):
     webhook or job. ``raise_errors=True`` is for callers with their own retry
     (the daily digest), where swallowing the failure means losing the message.
     """
+    if telegram_disabled():
+        print("Telegram dimatikan (TELEGRAM_DISABLED) - pesan tidak dikirim")
+        return
     if not settings.telegram_configured:
         return
     try:
