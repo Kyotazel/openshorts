@@ -6754,7 +6754,9 @@ async def saasshorts_voices(
 # Cloud mode is excluded on purpose: this is a single-operator feature, the
 # queue is a file on the server's disk, and the cloud app is multi-tenant.
 
-AUTOMATION_TICK_SECONDS = 30
+# Satu menit: antrean dikuras satu video per putaran, jadi ini juga jeda
+# tercepat antara satu job selesai dan job berikutnya dimulai.
+AUTOMATION_TICK_SECONDS = 60
 AUTOMATION_DELIVERY_TICK_SECONDS = 300
 AUTOMATION_RETRY_DELAY_SECONDS = 1800
 AUTOMATION_MAX_ATTEMPTS = 3
@@ -7009,8 +7011,35 @@ async def _automation_renew_leases(settings):
               f"{'ok' if ok else 'failed'}")
 
 
+async def _automation_pump():
+    """Mulai SATU pekerjaan berikutnya, kalau ada yang boleh dimulai.
+
+    Menggantikan pass harian di dalam loop. Bedanya: yang lama mengambil
+    SELURUH antrean sekaligus, yang ini satu - dan hanya kalau tidak ada job
+    lain yang sedang jalan. Itu yang membuat beban server terbatas pada satu
+    Chromium, bukan lima.
+
+    Aturan "boleh mulai" ada di automation.next_to_start(); di sini hanya
+    dijalankan. Tidak pernah melempar - satu video bermasalah tidak boleh
+    menghentikan penjadwalnya.
+    """
+    try:
+        settings = automation.get_settings()
+        item = automation.next_to_start(settings)
+        if not item:
+            return
+        await _automation_submit_pending(item)
+        # Ditulis tiap kali ada job dimulai; dashboard menampilkannya sebagai
+        # "job terakhir dimulai". Artinya berubah dari "pass harian sudah
+        # jalan" di versi sebelumnya.
+        automation.set_last_run(
+            automation.local_now(settings).date().isoformat())
+    except Exception as e:
+        print(f"Autopilot: pump error: {e}")
+
+
 async def automation_loop():
-    """Daily pass, retry sweep, RSS fallback and WebSub lease renewal."""
+    """Kuras antrean, polling channel, dan perpanjang sewa WebSub."""
     print("Autopilot: scheduler started.")
     while True:
         try:
@@ -7020,10 +7049,11 @@ async def automation_loop():
             settings = automation.get_settings()
             if not settings.get("enabled"):
                 continue
-            if automation.is_due(settings):
-                await _automation_daily_pass()
-            for item in automation.pending_due_retries():
-                await _automation_submit_pending(item)
+            # Antrean dulu: satu video per putaran, kalau boleh.
+            await _automation_pump()
+            # Polling TIDAK dijaga jam operasional, dan tetap jalan walau ada
+            # job berjalan: deteksi itu murah (~0,7 detik) dan menundanya
+            # berarti video baru tidak terlihat sampai window buka lagi.
             if automation.should_poll(_automation_state["last_poll"], settings):
                 _automation_state["last_poll"] = time.time()
                 await _automation_poll_channels(settings)
@@ -7240,6 +7270,8 @@ class AutomationChannelRequest(BaseModel):
 class AutomationSettingsRequest(BaseModel):
     enabled: Optional[bool] = None
     run_hour: Optional[int] = None
+    # Kosong berarti "sampai habis hari". Lihat automation.DEFAULT_RUN_HOUR_END.
+    run_hour_end: Optional[int] = None
     timezone: Optional[str] = None
     delivery: Optional[Dict[str, Any]] = None
 

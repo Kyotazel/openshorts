@@ -63,6 +63,7 @@ export default function AutomationPanel() {
       setForm({
         enabled: !!s.enabled,
         run_hour: s.run_hour != null ? s.run_hour : 8,
+        run_hour_end: s.run_hour_end != null ? s.run_hour_end : 24,
         timezone: s.timezone || 'Asia/Jakarta',
         url: delivery.url || '',
         file_field: delivery.file_field || 'file',
@@ -101,6 +102,7 @@ export default function AutomationPanel() {
       body: JSON.stringify({
         enabled: form.enabled,
         run_hour: Number(form.run_hour),
+        run_hour_end: Number(form.run_hour_end),
         timezone: form.timezone,
         delivery,
       }),
@@ -207,16 +209,34 @@ export default function AutomationPanel() {
 
         <div className="grid sm:grid-cols-2 gap-4 mb-4">
           <div>
-            <label className="eyebrow block mb-1.5">daily run hour (24h)</label>
-            <select
-              className="input-field w-full"
-              value={form.run_hour}
-              onChange={(e) => setForm((f) => ({ ...f, run_hour: Number(e.target.value) }))}
-            >
-              {Array.from({ length: 24 }, (_, h) => (
-                <option key={h} value={h}>{String(h).padStart(2, '0')}:00</option>
-              ))}
-            </select>
+            <label className="eyebrow block mb-1.5">operating hours ({form.timezone})</label>
+            <div className="flex items-center gap-2">
+              <select
+                className="input-field w-full"
+                value={form.run_hour}
+                onChange={(e) => setForm((f) => ({ ...f, run_hour: Number(e.target.value) }))}
+              >
+                {Array.from({ length: 24 }, (_, h) => (
+                  <option key={h} value={h}>{String(h).padStart(2, '0')}:00</option>
+                ))}
+              </select>
+              <span className="readout shrink-0">to</span>
+              <select
+                className="input-field w-full"
+                value={form.run_hour_end}
+                onChange={(e) => setForm((f) => ({ ...f, run_hour_end: Number(e.target.value) }))}
+              >
+                {Array.from({ length: 23 }, (_, i) => i + 1).map((h) => (
+                  <option key={h} value={h} disabled={h <= form.run_hour}>
+                    {String(h).padStart(2, '0')}:00
+                  </option>
+                ))}
+                <option value={24}>23:59 (end of day)</option>
+              </select>
+            </div>
+            <p className="readout mt-1.5">
+              New videos are clipped one at a time, only during these hours.
+            </p>
           </div>
           <div>
             <label className="eyebrow block mb-1.5">timezone</label>

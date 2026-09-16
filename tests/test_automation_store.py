@@ -87,21 +87,10 @@ def test_job_finished_marks_done(store):
     assert store.find_pending("v1")["status"] == "done"
 
 
-def test_is_due_only_after_run_hour_and_once_a_day(store):
-    from datetime import datetime, timezone
-    settings = store.save_settings({"enabled": True, "run_hour": 8,
-                                    "timezone": "Asia/Jakarta"})
-    early = datetime(2026, 9, 11, 0, 0, tzinfo=timezone.utc)   # 07:00 WIB
-    late = datetime(2026, 9, 11, 2, 0, tzinfo=timezone.utc)    # 09:00 WIB
-    assert store.is_due(settings, now=early) is False
-    assert store.is_due(settings, now=late) is True
-    store.set_last_run("2026-09-11")
-    assert store.is_due(settings, now=late) is False
-
-
-def test_disabled_never_due(store):
-    store.save_settings({"enabled": False})
-    assert store.is_due(store.get_settings()) is False
+# is_due() dihapus di Tahap 5: penjadwalannya berubah dari "sekali sehari"
+# menjadi "kuras antrean satu per satu selama jam operasional". Tesnya
+# pindah ke tests/test_automation_window.py, bersama tes in_window() dan
+# next_to_start() yang menggantikannya.
 
 
 def test_outbox_lifecycle(store):

@@ -376,3 +376,81 @@ def test_daily_pass_marks_today_and_submits(dirs, monkeypatch):
     assert sorted(submitted) == ["v1", "v2"]
     assert automation.get_schedule()["last_run_date"] == \
         automation.local_now().date().isoformat()
+
+
+# --- jam operasional (Tahap 5) -------------------------------------------------
+
+def _window_lebar(dirs):
+    """Window yang pasti melingkupi jam berapa pun, supaya tesnya tidak
+    bergantung pada jam dinding saat suite dijalankan."""
+    return _req("POST", "/api/automation/settings",
+                json={"enabled": True, "run_hour": 0, "run_hour_end": 24})
+
+
+def test_run_hour_end_lewat_api(dirs):
+    r = _req("POST", "/api/automation/settings",
+             json={"enabled": True, "run_hour": 8, "run_hour_end": 15})
+    assert r.status_code == 200
+    assert r.json()["settings"]["run_hour_end"] == 15
+    assert _req("GET", "/api/automation").json()["settings"]["run_hour_end"] == 15
+
+
+def test_run_hour_end_lebih_awal_ditolak_dengan_pesan_jelas(dirs):
+    r = _req("POST", "/api/automation/settings",
+             json={"enabled": True, "run_hour": 8, "run_hour_end": 6})
+    assert r.status_code == 400
+    assert "must be later than" in r.json()["detail"]
+
+
+def test_pump_memulai_satu_video(dirs, monkeypatch):
+    _window_lebar(dirs)
+    automation.add_pending({"video_id": "v1"})
+    dipanggil = []
+
+    async def _catat(item):
+        dipanggil.append(item)
+
+    monkeypatch.setattr(app_module, "_automation_submit_pending", _catat)
+    asyncio.run(app_module._automation_pump())
+    assert [i["video_id"] for i in dipanggil] == ["v1"]
+
+
+def test_pump_tidak_memulai_job_kedua(dirs, monkeypatch):
+    """Rem satu per satu - beban server terbatas pada satu Chromium."""
+    _window_lebar(dirs)
+    automation.add_pending({"video_id": "v1"})
+    automation.mark_queued("v1", "job-1")
+    automation.add_pending({"video_id": "v2"})
+    dipanggil = []
+
+    async def _catat(item):
+        dipanggil.append(item)
+
+    monkeypatch.setattr(app_module, "_automation_submit_pending", _catat)
+    asyncio.run(app_module._automation_pump())
+    assert dipanggil == []
+
+
+def test_pump_tidak_memulai_di_luar_jam(dirs, monkeypatch):
+    # Window 00:00-01:00 hampir pasti sudah lewat saat suite dijalankan.
+    _req("POST", "/api/automation/settings",
+         json={"enabled": True, "run_hour": 0, "run_hour_end": 1})
+    automation.add_pending({"video_id": "v1"})
+    dipanggil = []
+
+    async def _catat(item):
+        dipanggil.append(item)
+
+    monkeypatch.setattr(app_module, "_automation_submit_pending", _catat)
+    asyncio.run(app_module._automation_pump())
+    assert dipanggil == []
+    assert automation.find_pending("v1")["status"] == "new"   # tidak hilang
+
+
+def test_run_now_tetap_jalan_di_luar_jam(dirs, no_spawn):
+    """Keputusan: run-now harus bisa dipakai kapan saja."""
+    _req("POST", "/api/automation/settings",
+         json={"enabled": True, "run_hour": 0, "run_hour_end": 1})
+    r = _req("POST", "/api/automation/run-now")
+    assert r.status_code == 200
+    assert len(no_spawn) == 1     # pass-nya tetap dijadwalkan

@@ -25,6 +25,9 @@ from zoneinfo import ZoneInfo
 AUTOMATION_DIR = os.environ.get("AUTOMATION_DIR", "automation")
 DEFAULT_TIMEZONE = "Asia/Jakarta"
 DEFAULT_RUN_HOUR = 8
+# 24 berarti "sampai habis hari". Dipakai alih-alih 23 supaya jam 23:00-23:59
+# ikut masuk window; di dashboard ditampilkan sebagai "23:59 (habis hari)".
+DEFAULT_RUN_HOUR_END = 24
 
 _SETTINGS = "settings.json"
 _SUBSCRIPTIONS = "subscriptions.json"
@@ -35,6 +38,7 @@ _OUTBOX_DIR = "outbox"
 DEFAULT_SETTINGS = {
     "enabled": False,
     "run_hour": DEFAULT_RUN_HOUR,
+    "run_hour_end": DEFAULT_RUN_HOUR_END,
     "timezone": DEFAULT_TIMEZONE,
     "delivery": {
         "url": "",
@@ -110,7 +114,7 @@ def get_settings() -> dict:
     if not isinstance(data, dict):
         data = {}
     merged = json.loads(json.dumps(DEFAULT_SETTINGS))
-    for key in ("enabled", "run_hour", "timezone"):
+    for key in ("enabled", "run_hour", "run_hour_end", "timezone"):
         if key in data:
             merged[key] = data[key]
     delivery = data.get("delivery")
@@ -122,6 +126,17 @@ def get_settings() -> dict:
     except (TypeError, ValueError):
         merged["run_hour"] = DEFAULT_RUN_HOUR
     merged["run_hour"] = min(23, max(0, merged["run_hour"]))
+    try:
+        merged["run_hour_end"] = int(merged["run_hour_end"])
+    except (TypeError, ValueError):
+        merged["run_hour_end"] = DEFAULT_RUN_HOUR_END
+    else:
+        merged["run_hour_end"] = min(24, max(1, merged["run_hour_end"]))
+    if merged["run_hour_end"] <= merged["run_hour"]:
+        # Berkas lama, atau yang disunting tangan, bisa berisi pasangan yang
+        # mustahil. Diperbaiki alih-alih dilaporkan: get_settings dipanggil di
+        # dalam loop, dan melempar di situ mematikan penjadwalnya.
+        merged["run_hour_end"] = DEFAULT_RUN_HOUR_END
     merged["enabled"] = bool(merged["enabled"])
     return merged
 
@@ -136,7 +151,7 @@ def save_settings(patch: dict) -> dict:
     if not isinstance(patch, dict):
         raise ValueError("settings must be an object")
     current = get_settings()
-    allowed = {"enabled", "run_hour", "timezone", "delivery"}
+    allowed = {"enabled", "run_hour", "run_hour_end", "timezone", "delivery"}
     unknown = set(patch) - allowed
     if unknown:
         raise ValueError(f"unknown setting(s): {', '.join(sorted(unknown))}")
@@ -151,6 +166,19 @@ def save_settings(patch: dict) -> dict:
         if not 0 <= hour <= 23:
             raise ValueError("run_hour must be between 0 and 23")
         current["run_hour"] = hour
+    if "run_hour_end" in patch:
+        nilai = patch["run_hour_end"]
+        if nilai is None or str(nilai).strip() == "":
+            # Kosong berarti "sampai habis hari" - itulah 23:59 yang diminta.
+            current["run_hour_end"] = DEFAULT_RUN_HOUR_END
+        else:
+            try:
+                akhir = int(nilai)
+            except (TypeError, ValueError):
+                raise ValueError("run_hour_end must be an integer 0-24")
+            if not 1 <= akhir <= 24:
+                raise ValueError("run_hour_end must be between 1 and 24")
+            current["run_hour_end"] = akhir
     if "timezone" in patch:
         tz = str(patch["timezone"] or "").strip() or DEFAULT_TIMEZONE
         try:
@@ -189,6 +217,12 @@ def save_settings(patch: dict) -> dict:
                     raise ValueError(f"invalid header value for {name!r}")
                 cleaned.append({"name": name, "value": value})
             current["delivery"]["headers"] = cleaned
+    # Diperiksa SETELAH semua field dipasang: satu permintaan bisa mengubah
+    # run_hour dan run_hour_end sekaligus, dan PASANGANNYA yang harus sah.
+    if current["run_hour_end"] <= current["run_hour"]:
+        raise ValueError(
+            f"run_hour_end ({current['run_hour_end']}) must be later than "
+            f"run_hour ({current['run_hour']})")
     _write(_SETTINGS, current)
     return current
 
@@ -358,6 +392,17 @@ def pending_due_retries(now=None) -> list:
     return due
 
 
+def pending_in_flight() -> list:
+    """Video yang jobnya masih berjalan - sudah diambil, belum tuntas.
+
+    Status "queued" dipasang saat job dibuat dan baru diganti saat jobnya
+    selesai, jadi ia mencakup seluruh masa hidup job. Dipakai sebagai rem
+    "satu per satu": selama daftar ini tidak kosong, tidak ada job baru
+    yang dimulai.
+    """
+    return [p for p in list_pending() if p.get("status") == "queued"]
+
+
 def claim_pending(video_id: str, *expected: str, **fields) -> Optional[dict]:
     """Pindahkan status sebuah item HANYA kalau statusnya masih "expected".
 
@@ -445,15 +490,54 @@ def local_now(settings=None, now=None) -> datetime:
     return now.astimezone(_zone(settings.get("timezone")))
 
 
-def is_due(settings=None, now=None) -> bool:
-    """True when today's run hour has passed and the daily pass has not run."""
+def in_window(settings=None, now=None) -> bool:
+    """True kalau jam lokal sekarang ada DI DALAM jam operasional.
+
+    Batas akhirnya EKSKLUSIF: window 8-15 berarti pekerjaan baru boleh MULAI
+    sampai 14:59. Job yang sudah mulai tidak pernah diperiksa lagi - begitu
+    diambil, ia selesai sampai tuntas, termasuk yang lewat batas.
+    """
     settings = settings or get_settings()
-    if not settings.get("enabled"):
-        return False
     local = local_now(settings, now)
-    if local.hour < int(settings.get("run_hour", DEFAULT_RUN_HOUR)):
-        return False
-    return get_schedule().get("last_run_date") != local.date().isoformat()
+    mulai = int(settings.get("run_hour", DEFAULT_RUN_HOUR))
+    akhir = int(settings.get("run_hour_end", DEFAULT_RUN_HOUR_END))
+    return mulai <= local.hour < akhir
+
+
+def _as_timestamp(now) -> float:
+    """Terima datetime (tes) maupun detik Unix (loop). None = sekarang."""
+    if now is None:
+        return time.time()
+    if isinstance(now, datetime):
+        return now.timestamp()
+    return float(now)
+
+
+def next_to_start(settings=None, now=None):
+    """Item berikutnya yang boleh dimulai, atau None kalau belum ada yang boleh.
+
+    Urutannya sengaja:
+      1. ada job jalan          -> None (rem satu per satu)
+      2. retry yang jatuh tempo -> itu (retry TIDAK menunggu jam)
+      3. di luar jam            -> None (video tinggal di antrean)
+      4. video baru             -> yang paling lama menunggu
+
+    Menggantikan is_due(). Bedanya: ini menjawab "boleh mulai SATU sekarang?"
+    dan dipanggil tiap menit, bukan "sudah waktunya pass harian?".
+    """
+    if pending_in_flight():
+        return None
+    # pending_due_retries() bekerja dengan detik Unix sementara in_window()
+    # bekerja dengan datetime; diterjemahkan di sini supaya pemanggilnya
+    # (loop dan tes) boleh memberi salah satu.
+    jatuh_tempo = pending_due_retries(_as_timestamp(now))
+    if jatuh_tempo:
+        return jatuh_tempo[0]
+    settings = settings or get_settings()
+    if not in_window(settings, now):
+        return None
+    baru = pending_for_run()
+    return baru[0] if baru else None
 
 
 def should_poll(last_poll_ts, settings=None, now=None, interval_minutes=None) -> bool:
@@ -462,7 +546,11 @@ def should_poll(last_poll_ts, settings=None, now=None, interval_minutes=None) ->
         return False
     interval = interval_minutes
     if interval is None:
-        interval = int(os.environ.get("AUTOMATION_POLL_MINUTES", "30"))
+        # 1 menit: video baru harus terlihat secepatnya. yt-dlp terukur ~0,7
+        # detik per channel jadi bebannya kecil, tapi ini 60x lebih sering dari
+        # sebelumnya dan YouTube bisa membalas dengan rate-limit - naikkan
+        # lewat env ini kalau WARNING yt-dlp mulai berulang.
+        interval = int(os.environ.get("AUTOMATION_POLL_MINUTES", "1"))
     return (time.time() - float(last_poll_ts or 0)) >= interval * 60
 
 
