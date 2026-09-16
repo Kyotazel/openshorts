@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
-  Radio, Plus, Trash2, Loader2, Send, RefreshCw, Youtube, Clock,
+  Radio, Plus, Trash2, Loader2, Send, RefreshCw, Youtube, Clock, Ban,
   AlertTriangle, Copy, Check, Play,
 } from 'lucide-react';
 import { apiJson } from '../lib/api';
@@ -17,7 +17,7 @@ const PENDING_LABEL = {
   running: 'clip generator running',
   done: 'clips delivered',
   failed: 'failed',
-  skip: 'skipped',
+  skip: 'skipped \u2014 never runs',
 };
 
 const DELIVERY_TONE = {
@@ -140,11 +140,11 @@ export default function AutomationPanel() {
     await load();
   }), [act, load]);
 
-  const removePending = useCallback((item) => act('remove-pending-' + item.video_id, async () => {
+  const skipPending = useCallback((item) => act('skip-pending-' + item.video_id, async () => {
     const judul = item.title || item.video_id;
-    if (!window.confirm('Remove "' + judul + '" from the queue? It will not be processed.')) return;
-    await apiJson('/api/automation/pending/' + item.video_id, { method: 'DELETE' });
-    setMessage('Removed from the queue.');
+    if (!window.confirm('Skip "' + judul + '"? It stays in the list but will never be processed.')) return;
+    await apiJson('/api/automation/pending/' + item.video_id + '/skip', { method: 'POST' });
+    setMessage('Skipped. It will not be processed.');
     await load();
   }), [act, load]);
 
@@ -438,13 +438,13 @@ export default function AutomationPanel() {
                       <RefreshCw size={14} />
                     </button>
                   )}
-                  {item.status !== 'queued' && (
+                  {item.status !== 'queued' && item.status !== 'skip' && (
                     <button
-                      onClick={() => removePending(item)}
+                      onClick={() => skipPending(item)}
                       className="text-muted hover:text-warn transition-colors"
-                      title="Remove from the queue"
+                      title="Never process this video"
                     >
-                      <Trash2 size={14} />
+                      <Ban size={14} />
                     </button>
                   )}
                 </div>

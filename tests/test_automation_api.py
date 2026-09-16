@@ -465,6 +465,40 @@ def test_pump_tidak_memulai_di_luar_jam(dirs, monkeypatch):
 
 # --- membuang video dari antrean (lewat HTTP) ---------------------------------
 
+def test_lewati_pending_lewat_api(dirs):
+    automation.add_pending({"video_id": "v1", "title": "Lewati aku"})
+    r = _req("POST", "/api/automation/pending/v1/skip")
+    assert r.status_code == 200
+    assert r.json()["status"] == "skipped"
+    item = automation.find_pending("v1")
+    assert item["status"] == "skip"
+    assert "manual" in (item["last_error"] or "")
+
+
+def test_lewati_pending_yang_tidak_ada_404(dirs):
+    assert _req("POST", "/api/automation/pending/x/skip").status_code == 404
+
+
+def test_lewati_pending_yang_sedang_jalan_409(dirs):
+    automation.add_pending({"video_id": "v1"})
+    automation.mark_queued("v1", "job-1")
+    r = _req("POST", "/api/automation/pending/v1/skip")
+    assert r.status_code == 409
+
+
+def test_yang_dilewati_tidak_ditemukan_ulang_lewat_api(dirs):
+    """Polling berikutnya tidak boleh menghidupkannya kembali.
+
+    Inilah keluhan "sudah dihapus kok balik lagi": membuang barisnya
+    membuat add_pending() tidak punya pembanding dedup.
+    """
+    automation.add_pending({"video_id": "v1"})
+    assert _req("POST", "/api/automation/pending/v1/skip").status_code == 200
+    _, created = automation.add_pending({"video_id": "v1"})
+    assert created is False
+    assert automation.find_pending("v1")["status"] == "skip"
+
+
 def test_hapus_pending_lewat_api(dirs):
     automation.add_pending({"video_id": "v1", "title": "Buang aku"})
     r = _req("DELETE", "/api/automation/pending/v1")

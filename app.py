@@ -7430,6 +7430,24 @@ async def automation_run_now():
     return {"status": "started", "pending": len(automation.pending_for_run())}
 
 
+@app.post("/api/automation/pending/{video_id}/skip")
+async def automation_skip_pending(video_id: str):
+    """Tandai video supaya tidak pernah diproses, tapi barisnya tetap ada.
+
+    Barisnya harus tetap ada: itulah yang membuatnya tidak ditemukan ulang
+    sebagai video baru oleh polling berikutnya.
+    """
+    if not _automation_available():
+        raise HTTPException(status_code=404, detail="Not found")
+    if not automation.find_pending(video_id):
+        raise HTTPException(status_code=404, detail="Video not found")
+    if automation.skip_pending(video_id, "dilewati manual dari dashboard") is None:
+        raise HTTPException(
+            status_code=409,
+            detail="Jobnya sedang berjalan, atau videonya sudah dilewati.")
+    return {"status": "skipped", "video_id": video_id}
+
+
 @app.delete("/api/automation/pending/{video_id}")
 async def automation_remove_pending(video_id: str):
     """Buang video dari antrean supaya tidak pernah diproses."""

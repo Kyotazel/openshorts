@@ -122,6 +122,63 @@ def test_corrupt_file_is_set_aside(store):
     assert glob.glob(store._path("pending.json") + ".corrupt-*")
 
 
+# --- melewati video supaya tidak pernah diproses -------------------------------
+
+def test_skip_pending_menandai_tanpa_membuang_barisnya(store):
+    store.add_pending({"video_id": "v1", "title": "Jangan dijalankan"})
+    hasil = store.skip_pending("v1", "dilewati manual")
+    assert hasil["status"] == "skip"
+    assert hasil["last_error"] == "dilewati manual"
+    assert len(store.list_pending()) == 1, "barisnya harus tetap ada"
+
+
+def test_video_yang_dilewati_tidak_ditemukan_ulang_sebagai_baru(store):
+    """INI alasan barisnya tidak boleh dibuang.
+
+    Polling tiap menit menemukan video yang sama di daftar channel. Kalau
+    barisnya sudah hilang, add_pending() tidak punya pembanding dan
+    menambahkannya kembali - persis keluhan "sudah dihapus kok balik lagi".
+    """
+    store.add_pending({"video_id": "v1"})
+    store.skip_pending("v1")
+    _, created = store.add_pending({"video_id": "v1"})
+    assert created is False
+    assert len(store.list_pending()) == 1
+
+
+def test_video_yang_dilewati_tidak_pernah_dimulai(store):
+    store.save_settings({"enabled": True, "run_at": "00:00", "run_until": ""})
+    store.add_pending({"video_id": "v1"})
+    store.add_pending({"video_id": "v2"})
+    store.skip_pending("v1")
+    sisa = store.next_to_start()
+    assert sisa is not None and sisa["video_id"] == "v2"
+    store.skip_pending("v2")
+    assert store.next_to_start() is None
+
+
+def test_skip_pending_menolak_yang_sedang_jalan(store):
+    store.add_pending({"video_id": "v1"})
+    store.mark_queued("v1", "job-1")
+    assert store.skip_pending("v1") is None
+    assert store.find_pending("v1")["status"] == "queued"
+
+
+def test_skip_pending_bisa_dibatalkan_dengan_retry(store):
+    store.add_pending({"video_id": "v1"})
+    store.skip_pending("v1")
+    store.reset_pending("v1")
+    assert store.find_pending("v1")["status"] == "new"
+
+
+def test_buang_baris_ternyata_tidak_menghalangi_temuan_ulang(store):
+    """Kenapa remove_pending() bukan alat yang tepat, dikunci di tes."""
+    store.add_pending({"video_id": "v1"})
+    store.remove_pending("v1")
+    _, created = store.add_pending({"video_id": "v1"})
+    assert created is True, "inilah yang bikin videonya balik lagi"
+
+
 # --- membuang video dari antrean ----------------------------------------------
 
 def test_remove_pending_membuang_video(store):

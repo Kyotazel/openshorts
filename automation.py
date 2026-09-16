@@ -435,16 +435,40 @@ def reset_pending(video_id: str) -> Optional[dict]:
                           next_attempt_at=0, last_error=None, job_id=None)
 
 
+def skip_pending(video_id: str, alasan: str = "") -> Optional[dict]:
+    """Tandai satu video supaya TIDAK PERNAH diproses, tanpa membuang barisnya.
+
+    Ini yang dipakai tombol "jangan jalankan" di dashboard, dan barisnya
+    sengaja DIBIARKAN. Membuangnya justru tidak berhasil: polling berikutnya
+    menemukan video yang sama di daftar channel, tidak menemukannya lagi di
+    pending.json, lalu menambahkannya kembali - tiap satu menit. Baris yang
+    tetap ada adalah SATU-SATUNYA hal yang membuat add_pending() mengenalinya
+    sebagai duplikat.
+
+    "skip" juga sudah punya arti yang sama di alur otomatis: video yang gagal
+    permanen (mis. di bawah 45 detik) berakhir di status ini. Jadi ini bukan
+    status baru, cuma pintu masuk kedua.
+
+    MENOLAK item yang jobnya sedang berjalan (status "queued"): membatalkan
+    job yang sudah dipegang worker bukan urusan fungsi ini.
+    """
+    return claim_pending(video_id, "new", "retry", "failed", status="skip",
+                         attempts=0, next_attempt_at=0,
+                         last_error=(alasan or "")[:500] or None)
+
+
 def remove_pending(video_id: str) -> Optional[dict]:
-    """Buang satu video dari antrean supaya tidak pernah diproses.
+    """Buang satu video dari antrean. TERNYATA HAMPIR TIDAK BERGUNA.
 
-    Mengembalikan item yang dibuang, atau None kalau tidak ada.
+    Untuk video yang BELUM diproses, ini tidak menghasilkan apa yang
+    diharapkan: polling berikutnya (tiap 1 menit) menemukan video yang sama di
+    daftar channel dan menambahkannya kembali, karena barisnya sudah tidak ada
+    untuk dijadikan pembanding dedup. Pakai skip_pending() untuk itu.
 
-    MENOLAK item yang jobnya sedang berjalan (status "queued"). Membuangnya
-    akan membuat job itu yatim: _automation_after_job mencari itemnya lewat
-    list_pending(), tidak menemukannya, lalu berhenti - ZIP-nya tidak pernah
-    terkirim dan tidak ada satu pun pesan yang menjelaskan kenapa. Lebih baik
-    tombolnya tidak melakukan apa-apa daripada membatalkan secara diam-diam.
+    Berguna hanya untuk membersihkan baris yang sudah selesai (status "done"),
+    yang tidak akan pernah muncul lagi di daftar channel.
+
+    Tetap menolak item yang jobnya sedang berjalan (status "queued").
     """
     if (find_pending(video_id) or {}).get("status") == "queued":
         return None
