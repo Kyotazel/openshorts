@@ -6806,11 +6806,13 @@ def _parse_iso(value):
 
 
 def _published_after(published, created_at) -> bool:
-    """True when a feed entry is newer than the subscription.
+    """True when a video is new enough to belong to this subscription.
 
-    Enforces 'only videos published after subscribing': the RSS feed lists the
-    15 most recent uploads, and without this the first poll would backfill the
-    whole channel.
+    Yang dicegah fungsi ini adalah membanjiri antrean dengan SELURUH arsip
+    channel saat pertama kali dipoll, bukan selisih beberapa jam. Toleransi
+    sehari dipasang karena tanggal dari tab channel hanya perkiraan: video
+    yang diupload pagi hari bisa dibulatkan ke tengah malam dan terlihat
+    lebih tua daripada langganan yang dibuat siang harinya.
     """
     pub = _parse_iso(published)
     created = _parse_iso(created_at)
@@ -6818,7 +6820,7 @@ def _published_after(published, created_at) -> bool:
         return False
     if created is None:
         return True
-    return pub >= created
+    return pub >= (created - timedelta(days=1))
 
 
 def _automation_spawn(coro):
@@ -6952,7 +6954,7 @@ async def _automation_add_pending_notified(entry):
 
 
 async def _automation_poll_channels(settings):
-    """RSS fallback: catch anything WebSub did not deliver."""
+    """Polling berkala: tangkap apa pun yang tidak dikirim WebSub."""
     subs = automation.list_subscriptions()
     if not subs:
         return
@@ -6962,7 +6964,9 @@ async def _automation_poll_channels(settings):
         found = []
         for sub in subs:
             try:
-                feed = channel_watch.fetch_feed(sub.get("channel_id") or "")
+                # yt-dlp, bukan RSS: feed channel YouTube sudah menjawab 404
+                # untuk semua channel sejak 16 Sep 2026.
+                feed = channel_watch.list_uploads(sub.get("channel_id") or "")
             except Exception as e:
                 print(f"Autopilot: feed fetch failed for "
                       f"{sub.get('title') or sub.get('channel_id')}: {e}")

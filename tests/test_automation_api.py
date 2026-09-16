@@ -142,6 +142,23 @@ def test_add_list_remove_channel(dirs, monkeypatch):
     assert _req("GET", "/api/automation").json()["subscriptions"] == []
 
 
+def test_published_after_allows_a_same_day_upload(dirs):
+    """Tanggal dari tab channel hanya perkiraan, jadi toleransinya sehari.
+
+    Tanpa ini, video yang diupload pagi hari (dibulatkan ke tengah malam)
+    akan ditolak oleh langganan yang dibuat siang harinya.
+    """
+    assert app_module._published_after(
+        "2026-09-16T00:00:00+00:00", "2026-09-16T06:24:33+00:00") is True
+
+
+def test_published_after_still_rejects_an_old_archive(dirs):
+    """Yang dicegah: arsip lama ikut masuk saat channel baru ditambahkan."""
+    assert app_module._published_after(
+        "2024-01-01T00:00:00+00:00", "2026-09-16T06:24:33+00:00") is False
+    assert app_module._published_after(None, "2026-09-16T06:24:33+00:00") is False
+
+
 def test_add_channel_without_public_url_is_rss_only(dirs, monkeypatch):
     monkeypatch.delenv("PUBLIC_API_URL", raising=False)
     monkeypatch.setattr(channel_watch, "resolve",
@@ -165,7 +182,7 @@ def test_add_channel_rejects_unresolvable(dirs, monkeypatch):
 def test_websub_verification_echoes_challenge_and_stores_lease(dirs):
     sub = automation.add_subscription(CID, title="C")
     resp = _req("GET", "/api/automation/youtube/callback", params={
-        "hub.mode": "subscribe", "hub.topic": channel_watch.feed_url(CID),
+        "hub.mode": "subscribe", "hub.topic": channel_watch.topic_url(CID),
         "hub.challenge": "challenge-123", "hub.lease_seconds": "3600"})
     assert resp.status_code == 200 and resp.text == "challenge-123"
     stored = automation.find_subscription(sub_id=sub["id"])

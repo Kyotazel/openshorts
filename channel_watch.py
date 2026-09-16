@@ -1,22 +1,50 @@
-"""YouTube channel detection: resolve a channel, WebSub push, RSS fallback.
+"""YouTube channel detection: resolve a channel, WebSub push, yt-dlp poll.
 
 WebSub (PubSubHubbub) is YouTube's only real 'webhook': register the channel's
-Atom feed with the hub and it POSTs the feed to us when something is published.
-It is best-effort -- notifications can be late or dropped -- so the RSS feed is
-also polled on a timer and both paths feed the same video_id dedup.
+topic with the hub and it POSTs the Atom feed to us when something is
+published. It is best-effort -- the hub answers 503 often enough that every
+call has to be retried -- so the channel is also polled on a timer and both
+paths feed the same video_id dedup.
+
+KENAPA POLLING-NYA PAKAI yt-dlp, BUKAN RSS: feed channel YouTube
+(youtube.com/feeds/videos.xml?channel_id=...) SUDAH TIDAK ADA. Diperiksa
+16 Sep 2026: ia menjawab 404 untuk SEMUA channel -- termasuk channel milik
+YouTube sendiri -- dari tiga jaringan berbeda. Yang tersisa hanya URL topik
+WebSub (/xml/feeds/videos.xml), dan itu berkas statis berisi keterangan,
+bukan feed. yt-dlp sudah jadi dependensi repo ini dan tidak butuh kunci API,
+jadi ia yang mengambil alih. parse_feed() tetap ada karena hub masih
+mengirim Atom ke callback kita.
 
 Network helpers take an optional client so tests can drive them with a stub
 instead of reaching YouTube.
 """
 import html
+import json
 import re
+import subprocess
+import sys
+import time
+import sys
+from datetime import datetime, timezone
 from xml.etree import ElementTree as ET
 
 import httpx
 
 HUB_URL = "https://pubsubhubbub.appspot.com/subscribe"
-FEED_URL = "https://www.youtube.com/feeds/videos.xml?channel_id={}"
+# URL TOPIK untuk hub, bukan feed yang bisa dibaca. YouTube sendiri yang
+# menyebutkannya di berkas statis /xml/feeds/videos.xml: "The corresponding
+# feed (identified in the <link rel="self"/> tag) should be used as a topic
+# on the http://pubsubhubbub.appspot.com hub".
+TOPIC_URL = "https://www.youtube.com/xml/feeds/videos.xml?channel_id={}"
 WATCH_URL = "https://www.youtube.com/watch?v={}"
+
+# Hub menjawab 503 "Transient error" jauh lebih sering daripada 202 saat
+# diukur 16 Sep 2026 (3 dari 4 percobaan), jadi sekali coba tidak cukup.
+HUB_ATTEMPTS = 3
+HUB_RETRY_DELAY = 2
+
+YTDLP_LIMIT = 5
+YTDLP_TIMEOUT = 60
 
 # A plain bot UA gets a consent page from youtube.com; the channel page fetch
 # needs to look like a browser. The hub and the feed do not care.
@@ -69,29 +97,39 @@ def resolve(query: str, client=None) -> dict:
     if not query:
         raise ValueError("channel URL or handle is required")
     direct = extract_channel_id(query)
-    if direct and (is_channel_id(query) or "/channel/" in query):
-        feed = fetch_feed(direct, client=client)
-        return {"channel_id": direct, "title": feed["title"],
-                "handle": _extract_handle(query)}
+    punya_id = bool(direct) and (is_channel_id(query) or "/channel/" in query)
+    if punya_id:
+        # Dulu di sini cukup membaca feed; judulnya diambil dari sana. Feed
+        # itu sudah tidak ada, dan halaman channel satu-satunya sumber judul
+        # yang tersisa - jadi jalur ini sekarang ikut mengambil halaman.
+        url = f"https://www.youtube.com/channel/{direct}"
+    else:
+        url = query if query.startswith("http") else \
+            f"https://www.youtube.com/@{query.lstrip('@')}"
 
-    url = query if query.startswith("http") else \
-        f"https://www.youtube.com/@{query.lstrip('@')}"
     http, own = _client(client)
     try:
         resp = http.get(url, headers={"User-Agent": PAGE_USER_AGENT,
                                       "Accept-Language": "en-US,en;q=0.9"})
         resp.raise_for_status()
         page = resp.text
+    except Exception:
+        # ID-nya sudah kita pegang, jadi gagal ambil judul bukan alasan untuk
+        # menolak channelnya. Jalur handle tetap harus punya halaman.
+        if not punya_id:
+            raise
+        return {"channel_id": direct, "title": "", "handle": _extract_handle(query)}
     finally:
         if own:
             http.close()
 
-    channel_id = None
+    channel_id = direct if punya_id else None
     for pattern in (_EXTERNAL_ID_RE, _ITEMPROP_ID_RE, _CHANNEL_ID_RE):
+        if channel_id:
+            break
         match = pattern.search(page)
         if match:
             channel_id = match.group(1)
-            break
     if not channel_id:
         raise ValueError("Could not find a channel on that page. "
                          "Paste the channel URL or use /channel/UC...")
@@ -99,8 +137,9 @@ def resolve(query: str, client=None) -> dict:
             "handle": _extract_handle(query)}
 
 
-def feed_url(channel_id: str) -> str:
-    return FEED_URL.format(channel_id)
+def topic_url(channel_id: str) -> str:
+    """URL topik untuk hub. Bukan alamat yang bisa dibaca sebagai feed."""
+    return TOPIC_URL.format(channel_id)
 
 
 def parse_feed(xml_text: str) -> dict:
@@ -131,16 +170,63 @@ def parse_feed(xml_text: str) -> dict:
     return {"title": channel_title, "entries": entries}
 
 
-def fetch_feed(channel_id: str, client=None) -> dict:
-    http, own = _client(client)
+def _iso_from_timestamp(value) -> str:
+    """Unix detik -> ISO UTC. Kosong kalau tidak ada, supaya penyaring tanggal
+    memperlakukan video tanpa tanggal sebagai "tidak diketahui" alih-alih
+    membuangnya karena kesalahan parsing."""
     try:
-        resp = http.get(feed_url(channel_id),
-                        headers={"User-Agent": FEED_USER_AGENT})
-        resp.raise_for_status()
-        return parse_feed(resp.text)
-    finally:
-        if own:
-            http.close()
+        return datetime.fromtimestamp(int(value), timezone.utc).isoformat()
+    except (TypeError, ValueError, OSError):
+        return ""
+
+
+def list_uploads(channel_id: str, limit: int = YTDLP_LIMIT,
+                 timeout: int = YTDLP_TIMEOUT) -> dict:
+    """Ambil upload terbaru sebuah channel lewat yt-dlp.
+
+    Mengembalikan bentuk yang sama dengan parse_feed: {title, entries}, supaya
+    pemanggilnya tidak perlu tahu dari mana daftarnya datang.
+
+    approximate_date diminta eksplisit: tanpa itu tab channel tidak
+    menyertakan tanggal sama sekali (timestamp=None), dan penyaring "hanya
+    video yang terbit setelah langganan" kehilangan bahannya.
+    """
+    cmd = [sys.executable, "-m", "yt_dlp",
+           "--flat-playlist", "--playlist-end", str(int(limit)),
+           "--dump-json", "--no-warnings", "--ignore-errors",
+           "--extractor-args", "youtubetab:approximate_date",
+           f"https://www.youtube.com/channel/{channel_id}/videos"]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True,
+                              timeout=timeout)
+    except (OSError, subprocess.SubprocessError) as e:
+        print(f"WARNING: yt-dlp gagal untuk {channel_id}: {e}")
+        return {"title": "", "entries": []}
+
+    entries = []
+    for baris in (proc.stdout or "").splitlines():
+        baris = baris.strip()
+        if not baris.startswith("{"):
+            continue
+        try:
+            data = json.loads(baris)
+        except ValueError:
+            continue
+        video_id = str(data.get("id") or "").strip()
+        if not video_id:
+            continue
+        entries.append({
+            "video_id": video_id,
+            "channel_id": channel_id,
+            "title": str(data.get("title") or "").strip(),
+            "published": _iso_from_timestamp(data.get("timestamp")),
+            "url": str(data.get("url") or WATCH_URL.format(video_id)),
+        })
+    if not entries:
+        ekor = (proc.stderr or "").strip().splitlines()
+        print(f"WARNING: yt-dlp tidak menemukan video untuk {channel_id}"
+              + (f": {ekor[-1][:160]}" if ekor else ""))
+    return {"title": "", "entries": entries}
 
 
 def websub_subscribe(callback_url: str, channel_id: str, client=None,
@@ -158,7 +244,7 @@ def _hub_call(mode: str, callback_url: str, channel_id: str, client=None,
               lease_seconds=None) -> bool:
     data = {
         "hub.mode": mode,
-        "hub.topic": feed_url(channel_id),
+        "hub.topic": topic_url(channel_id),
         "hub.callback": callback_url,
         "hub.verify": "async",
     }
@@ -166,10 +252,16 @@ def _hub_call(mode: str, callback_url: str, channel_id: str, client=None,
         data["hub.lease_seconds"] = str(int(lease_seconds))
     http, own = _client(client)
     try:
-        resp = http.post(HUB_URL, data=data,
-                         headers={"User-Agent": FEED_USER_AGENT})
-        if resp.status_code in (202, 204):
-            return True
+        resp = None
+        for percobaan in range(HUB_ATTEMPTS):
+            resp = http.post(HUB_URL, data=data,
+                             headers={"User-Agent": FEED_USER_AGENT})
+            if resp.status_code in (202, 204):
+                return True
+            if resp.status_code not in (429, 503):
+                break
+            if percobaan < HUB_ATTEMPTS - 1:
+                time.sleep(HUB_RETRY_DELAY)
         print(f"WARNING: WebSub {mode} for {channel_id}: HTTP {resp.status_code} "
               f"{resp.text[:200]}")
         return False
