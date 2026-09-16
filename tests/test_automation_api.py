@@ -81,7 +81,8 @@ def _stub_probe(monkeypatch, duration=600, max_height=1080):
 def test_status_defaults(dirs):
     body = _req("GET", "/api/automation").json()
     assert body["settings"]["enabled"] is False
-    assert body["settings"]["run_hour"] == 8
+    assert body["settings"]["run_at"] == "08:00"
+    assert body["settings"]["run_until"] == ""
     assert body["settings"]["delivery"]["secret"] == ""
     assert body["secret_set"] is False
     assert body["subscriptions"] == [] and body["pending"] == []
@@ -89,23 +90,23 @@ def test_status_defaults(dirs):
 
 def test_settings_roundtrip_and_secret_never_returned(dirs):
     resp = _req("POST", "/api/automation/settings", json={
-        "enabled": True, "run_hour": 9,
+        "enabled": True, "run_at": "09:15",
         "delivery": {"url": "https://api.test/hook", "secret": "shh",
                      "headers": [{"name": "X-Key", "value": "v"}]}})
     assert resp.status_code == 200
     body = resp.json()
-    assert body["settings"]["run_hour"] == 9
+    assert body["settings"]["run_at"] == "09:15"
     assert body["settings"]["delivery"]["secret"] == ""
     assert body["secret_set"] is True
     # Updating the hour must not wipe the stored secret.
-    resp2 = _req("POST", "/api/automation/settings", json={"run_hour": 10})
+    resp2 = _req("POST", "/api/automation/settings", json={"run_at": "10:30"})
     assert resp2.json()["secret_set"] is True
     assert automation.get_settings()["delivery"]["secret"] == "shh"
 
 
 def test_settings_rejects_bad_values(dirs):
     assert _req("POST", "/api/automation/settings",
-                json={"run_hour": 99}).status_code == 400
+                json={"run_at": "99:00"}).status_code == 400
     assert _req("POST", "/api/automation/settings",
                 json={"timezone": "Nowhere/Here"}).status_code == 400
 
@@ -384,22 +385,37 @@ def _window_lebar(dirs):
     """Window yang pasti melingkupi jam berapa pun, supaya tesnya tidak
     bergantung pada jam dinding saat suite dijalankan."""
     return _req("POST", "/api/automation/settings",
-                json={"enabled": True, "run_hour": 0, "run_hour_end": 24})
+                json={"enabled": True, "run_at": "00:00", "run_until": ""})
 
 
-def test_run_hour_end_lewat_api(dirs):
+def test_jam_operasional_lewat_api(dirs):
     r = _req("POST", "/api/automation/settings",
-             json={"enabled": True, "run_hour": 8, "run_hour_end": 15})
+             json={"enabled": True, "run_at": "08:45", "run_until": "15:30"})
     assert r.status_code == 200
-    assert r.json()["settings"]["run_hour_end"] == 15
-    assert _req("GET", "/api/automation").json()["settings"]["run_hour_end"] == 15
+    assert r.json()["settings"]["run_at"] == "08:45"
+    assert r.json()["settings"]["run_until"] == "15:30"
+    diambil = _req("GET", "/api/automation").json()["settings"]
+    assert diambil["run_at"] == "08:45" and diambil["run_until"] == "15:30"
 
 
-def test_run_hour_end_lebih_awal_ditolak_dengan_pesan_jelas(dirs):
+def test_run_until_kosong_berarti_habis_hari(dirs):
     r = _req("POST", "/api/automation/settings",
-             json={"enabled": True, "run_hour": 8, "run_hour_end": 6})
+             json={"enabled": True, "run_at": "08:45", "run_until": ""})
+    assert r.status_code == 200
+    assert r.json()["settings"]["run_until"] == ""
+
+
+def test_run_until_lebih_awal_ditolak_dengan_pesan_jelas(dirs):
+    r = _req("POST", "/api/automation/settings",
+             json={"enabled": True, "run_at": "08:00", "run_until": "06:00"})
     assert r.status_code == 400
     assert "must be later than" in r.json()["detail"]
+
+
+def test_jam_ngawur_ditolak_dengan_pesan_jelas(dirs):
+    r = _req("POST", "/api/automation/settings", json={"run_at": "25:00"})
+    assert r.status_code == 400
+    assert "08:45" in r.json()["detail"]
 
 
 def test_pump_memulai_satu_video(dirs, monkeypatch):
@@ -432,9 +448,9 @@ def test_pump_tidak_memulai_job_kedua(dirs, monkeypatch):
 
 
 def test_pump_tidak_memulai_di_luar_jam(dirs, monkeypatch):
-    # Window 00:00-01:00 hampir pasti sudah lewat saat suite dijalankan.
+    # Window 00:00-00:01 hampir pasti sudah lewat saat suite dijalankan.
     _req("POST", "/api/automation/settings",
-         json={"enabled": True, "run_hour": 0, "run_hour_end": 1})
+         json={"enabled": True, "run_at": "00:00", "run_until": "00:01"})
     automation.add_pending({"video_id": "v1"})
     dipanggil = []
 
@@ -450,7 +466,7 @@ def test_pump_tidak_memulai_di_luar_jam(dirs, monkeypatch):
 def test_run_now_tetap_jalan_di_luar_jam(dirs, no_spawn):
     """Keputusan: run-now harus bisa dipakai kapan saja."""
     _req("POST", "/api/automation/settings",
-         json={"enabled": True, "run_hour": 0, "run_hour_end": 1})
+         json={"enabled": True, "run_at": "00:00", "run_until": "00:01"})
     r = _req("POST", "/api/automation/run-now")
     assert r.status_code == 200
     assert len(no_spawn) == 1     # pass-nya tetap dijadwalkan

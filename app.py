@@ -6948,10 +6948,9 @@ async def _automation_add_pending_notified(entry):
     item, created = automation.add_pending(entry)
     if created:
         settings = automation.get_settings()
-        jam = int(settings.get("run_hour") or 8)
         await autopilot_notify.kirim(autopilot_notify.pesan_video_baru(
             item.get("title") or "", item.get("channel_title") or "",
-            f"jam {jam:02d}:00"))
+            f"jam {settings.get('run_at') or '08:00'}"))
     return item, created
 
 
@@ -7269,9 +7268,9 @@ class AutomationChannelRequest(BaseModel):
 
 class AutomationSettingsRequest(BaseModel):
     enabled: Optional[bool] = None
-    run_hour: Optional[int] = None
-    # Kosong berarti "sampai habis hari". Lihat automation.DEFAULT_RUN_HOUR_END.
-    run_hour_end: Optional[int] = None
+    # "HH:MM", jadi 08:45 boleh. Lihat automation._clock_minutes.
+    run_at: Optional[str] = None
+    run_until: Optional[str] = None
     timezone: Optional[str] = None
     delivery: Optional[Dict[str, Any]] = None
 

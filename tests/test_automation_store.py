@@ -11,16 +11,17 @@ def store(tmp_path, monkeypatch):
 
 
 def test_defaults_and_roundtrip(store):
-    assert store.get_settings()["run_hour"] == 8
+    assert store.get_settings()["run_at"] == "08:00"
+    assert store.get_settings()["run_until"] == ""      # habis hari
     assert store.get_settings()["enabled"] is False
-    saved = store.save_settings({"enabled": True, "run_hour": 7,
+    saved = store.save_settings({"enabled": True, "run_at": "07:15",
                                  "timezone": "Asia/Jakarta"})
-    assert saved["run_hour"] == 7
+    assert saved["run_at"] == "07:15"
     assert store.get_settings()["enabled"] is True
 
 
 def test_settings_validation(store):
-    for bad in ({"run_hour": 24}, {"run_hour": "x"}, {"timezone": "Mars/Olympus"},
+    for bad in ({"run_at": "25:00"}, {"run_at": "x"}, {"timezone": "Mars/Olympus"},
                 {"delivery": {"headers": [{"name": "X: Y", "value": "v"}]}},
                 {"delivery": {"headers": "nope"}}, {"nope": 1}):
         with pytest.raises(ValueError):

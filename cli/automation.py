@@ -48,7 +48,9 @@ def cmd_status(_args) -> int:
 
     print("=== SETELAN ===")
     print(f"  autopilot   : {'AKTIF' if settings.get('enabled') else 'mati'}")
-    print(f"  jam proses  : {settings.get('run_hour')}:00 ({settings.get('timezone')})")
+    print(f"  jam proses  : {settings.get('run_at')} - "
+          f"{settings.get('run_until') or 'habis hari'} "
+          f"({settings.get('timezone')})")
     url = delivery.get("url") or ""
     print(f"  tujuan kirim: {url or '(BELUM DIISI - kirim akan gagal)'}")
     print(f"  signature   : {'ya' if delivery.get('secret') else 'tidak'}")

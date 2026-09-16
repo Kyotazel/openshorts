@@ -3,9 +3,10 @@
 Menggantikan tes is_due() yang lama: penjadwalannya berubah dari "sekali sehari
 jam run_hour" menjadi "kuras antrean satu per satu selama jam operasional".
 
-Batas akhirnya EKSKLUSIF - window 8-15 berarti pekerjaan baru boleh mulai
-sampai 14:59 - dan itu dikunci di sini karena seluruh keputusan "video yang
-mulai 14:55 diselesaikan sampai tuntas" bergantung padanya.
+Jamnya sekarang "HH:MM", bukan jam bulat, jadi 08:45 boleh. Batas akhirnya
+EKSKLUSIF - window 08:45-15:30 berarti pekerjaan baru boleh mulai sampai 15:29 -
+dan itu dikunci di sini karena seluruh keputusan "video yang mulai 14:55
+diselesaikan sampai tuntas" bergantung padanya.
 """
 from datetime import datetime, timedelta, timezone
 
@@ -22,97 +23,147 @@ def store(tmp_path, monkeypatch):
     return A
 
 
-def wib(jam, menit=30, hari=16):
+def wib(jam, menit=0, hari=16):
     return datetime(2026, 9, hari, jam, menit, tzinfo=WIB)
 
 
 def aktif(store, **ubah):
-    setelan = {"enabled": True, "run_hour": 8, "run_hour_end": 15,
+    setelan = {"enabled": True, "run_at": "08:45", "run_until": "15:30",
                "timezone": "Asia/Jakarta"}
     setelan.update(ubah)
     return store.save_settings(setelan)
 
 
-# --- in_window ----------------------------------------------------------------
+# --- in_window, sampai ke menitnya --------------------------------------------
 
-@pytest.mark.parametrize("jam", [8, 12, 14])
-def test_di_dalam_window(store, jam):
+@pytest.mark.parametrize("jam,menit", [(8, 45), (12, 0), (15, 29)])
+def test_di_dalam_window(store, jam, menit):
     aktif(store)
-    assert store.in_window(now=wib(jam)) is True
+    assert store.in_window(now=wib(jam, menit)) is True
 
 
-@pytest.mark.parametrize("jam", [0, 7, 15, 23])
-def test_di_luar_window(store, jam):
+@pytest.mark.parametrize("jam,menit", [(0, 0), (8, 44), (15, 30), (23, 0)])
+def test_di_luar_window(store, jam, menit):
     aktif(store)
-    assert store.in_window(now=wib(jam)) is False
+    assert store.in_window(now=wib(jam, menit)) is False
 
 
-def test_batas_1459_lolos_1500_tidak(store):
+def test_batas_menit_dihormati(store):
+    """Inti presisi menit: 08:44 ditolak, 08:45 diterima."""
+    aktif(store)
+    assert store.in_window(now=wib(8, 44)) is False
+    assert store.in_window(now=wib(8, 45)) is True
+
+
+def test_batas_akhir_eksklusif(store):
     """Mengunci keputusan "mulai 14:55, butuh 30 menit -> lanjut"."""
     aktif(store)
-    assert store.in_window(now=wib(14, 59)) is True
-    assert store.in_window(now=wib(15, 0)) is False
+    assert store.in_window(now=wib(15, 29)) is True
+    assert store.in_window(now=wib(15, 30)) is False
 
 
-def test_akhir_24_berarti_habis_hari(store):
-    aktif(store, run_hour_end=24)
-    assert store.in_window(now=wib(23)) is True
+def test_akhir_kosong_berarti_habis_hari(store):
+    aktif(store, run_until="")
+    assert store.get_settings()["run_until"] == ""
+    assert store.in_window(now=wib(23, 59)) is True
 
 
 def test_ikut_timezone(store):
     aktif(store)
-    # 01:00 UTC = 08:00 WIB
-    assert store.in_window(now=datetime(2026, 9, 16, 1, 0,
+    # 01:45 UTC = 08:45 WIB
+    assert store.in_window(now=datetime(2026, 9, 16, 1, 45,
                                         tzinfo=timezone.utc)) is True
-    # 00:00 UTC = 07:00 WIB
-    assert store.in_window(now=datetime(2026, 9, 16, 0, 0,
+    # 01:44 UTC = 08:44 WIB
+    assert store.in_window(now=datetime(2026, 9, 16, 1, 44,
                                         tzinfo=timezone.utc)) is False
 
 
-def test_setelan_lama_tanpa_run_hour_end_dianggap_habis_hari(store):
+# --- setelan lama tetap terbaca ------------------------------------------------
+
+def test_setelan_lama_jam_bulat_tetap_terbaca(store):
+    """settings.json yang sudah terpasang tidak perlu disunting tangan."""
     store._write(store._SETTINGS, {"enabled": True, "run_hour": 8,
+                                   "run_hour_end": 15,
                                    "timezone": "Asia/Jakarta"})
-    assert store.get_settings()["run_hour_end"] == 24
-    assert store.in_window(now=wib(23)) is True
+    setelan = store.get_settings()
+    assert setelan["run_at"] == "08:00"
+    assert setelan["run_until"] == "15:00"
+    assert store.in_window(now=wib(8, 0)) is True
+    assert store.in_window(now=wib(15, 0)) is False
 
 
-# --- validasi setelan ---------------------------------------------------------
+def test_setelan_lama_run_hour_end_24_jadi_habis_hari(store):
+    store._write(store._SETTINGS, {"enabled": True, "run_hour": 8,
+                                   "run_hour_end": 24,
+                                   "timezone": "Asia/Jakarta"})
+    assert store.get_settings()["run_until"] == ""
+
+
+def test_berkas_dengan_pasangan_mustahil_diperbaiki_bukan_dilempar(store):
+    store._write(store._SETTINGS, {"enabled": True, "run_at": "20:00",
+                                   "run_until": "06:00",
+                                   "timezone": "Asia/Jakarta"})
+    setelan = store.get_settings()          # tidak boleh melempar
+    assert setelan["run_until"] == ""
+    assert store.in_window(now=wib(21, 0)) is True
+
+
+def test_berkas_dengan_jam_ngawur_diperbaiki(store):
+    store._write(store._SETTINGS, {"enabled": True, "run_at": "setengah lima",
+                                   "run_until": "25:99",
+                                   "timezone": "Asia/Jakarta"})
+    setelan = store.get_settings()
+    assert setelan["run_at"] == "08:00"
+    assert setelan["run_until"] == ""
+
+
+# --- validasi ------------------------------------------------------------------
 
 def test_akhir_harus_setelah_mulai(store):
     with pytest.raises(ValueError):
-        store.save_settings({"enabled": True, "run_hour": 8, "run_hour_end": 6})
+        store.save_settings({"enabled": True, "run_at": "08:00",
+                             "run_until": "06:00"})
 
 
-def test_kosong_berarti_habis_hari(store):
-    aktif(store)
-    assert store.save_settings({"run_hour_end": ""})["run_hour_end"] == 24
-    assert store.save_settings({"run_hour_end": None})["run_hour_end"] == 24
+def test_jam_bulat_lama_masih_diterima(store):
+    """Bentuk lama (angka) tetap boleh masuk, supaya CLI/lama tidak pecah."""
+    hasil = store.save_settings({"enabled": True, "run_at": 9, "run_until": 17})
+    assert hasil["run_at"] == "09:00" and hasil["run_until"] == "17:00"
 
 
-@pytest.mark.parametrize("buruk", [0, 25, -1, "x"])
-def test_akhir_di_luar_rentang_ditolak(store, buruk):
+@pytest.mark.parametrize("buruk", ["25:00", "08:60", "x", "08:45:00", -1])
+def test_jam_ngawur_ditolak(store, buruk):
     with pytest.raises(ValueError):
-        store.save_settings({"run_hour_end": buruk})
+        store.save_settings({"run_at": buruk})
+
+
+def test_jam_bulat_sebagai_teks_masih_diterima(store):
+    """Bentuk lama boleh datang sebagai angka maupun teks."""
+    assert store.save_settings({"run_at": "8"})["run_at"] == "08:00"
+
+
+def test_run_at_kosong_ditolak(store):
+    """run_at tidak punya arti "kosong"; hanya run_until yang punya."""
+    with pytest.raises(ValueError):
+        store.save_settings({"run_at": ""})
+
+
+def test_akhir_kosong_berarti_habis_hari_lewat_save(store):
+    aktif(store)
+    assert store.save_settings({"run_until": ""})["run_until"] == ""
+    assert store.save_settings({"run_until": None})["run_until"] == ""
 
 
 def test_satu_permintaan_boleh_mengubah_keduanya(store):
-    hasil = store.save_settings({"enabled": True, "run_hour": 9,
-                                 "run_hour_end": 17})
-    assert hasil["run_hour"] == 9 and hasil["run_hour_end"] == 17
+    hasil = store.save_settings({"enabled": True, "run_at": "09:15",
+                                 "run_until": "17:45"})
+    assert hasil["run_at"] == "09:15" and hasil["run_until"] == "17:45"
 
 
 def test_ubah_mulai_saja_sampai_menabrak_akhir_ditolak(store):
     aktif(store)
     with pytest.raises(ValueError):
-        store.save_settings({"run_hour": 20})
-
-
-def test_berkas_dengan_pasangan_mustahil_diperbaiki_bukan_dilempar(store):
-    store._write(store._SETTINGS, {"enabled": True, "run_hour": 20,
-                                   "run_hour_end": 6,
-                                   "timezone": "Asia/Jakarta"})
-    setelan = store.get_settings()          # tidak boleh melempar
-    assert setelan["run_hour_end"] == 24
+        store.save_settings({"run_at": "20:00"})
 
 
 # --- next_to_start: urutan pengurasan antrean ---------------------------------

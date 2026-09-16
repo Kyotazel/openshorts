@@ -24,10 +24,12 @@ from zoneinfo import ZoneInfo
 # same with its tunables). Everything reads through _dir().
 AUTOMATION_DIR = os.environ.get("AUTOMATION_DIR", "automation")
 DEFAULT_TIMEZONE = "Asia/Jakarta"
-DEFAULT_RUN_HOUR = 8
-# 24 berarti "sampai habis hari". Dipakai alih-alih 23 supaya jam 23:00-23:59
-# ikut masuk window; di dashboard ditampilkan sebagai "23:59 (habis hari)".
-DEFAULT_RUN_HOUR_END = 24
+# Jam operasional disimpan sebagai teks "HH:MM", bukan angka jam bulat, supaya
+# bisa diketik bebas dari dashboard (08:45, bukan cuma 08:00).
+DEFAULT_RUN_AT = "08:00"
+# Kosong berarti "sampai habis hari". Itu juga satu-satunya cara sebuah
+# <input type="time"> bisa mengatakannya, karena HTML tidak punya nilai 24:00.
+DEFAULT_RUN_UNTIL = ""
 
 _SETTINGS = "settings.json"
 _SUBSCRIPTIONS = "subscriptions.json"
@@ -37,8 +39,8 @@ _OUTBOX_DIR = "outbox"
 
 DEFAULT_SETTINGS = {
     "enabled": False,
-    "run_hour": DEFAULT_RUN_HOUR,
-    "run_hour_end": DEFAULT_RUN_HOUR_END,
+    "run_at": DEFAULT_RUN_AT,
+    "run_until": DEFAULT_RUN_UNTIL,
     "timezone": DEFAULT_TIMEZONE,
     "delivery": {
         "url": "",
@@ -107,6 +109,76 @@ def _zone(name):
         return ZoneInfo(DEFAULT_TIMEZONE)
 
 
+# --- jam operasional ------------------------------------------------------------
+
+def _clock_minutes(nilai):
+    """Teks jam -> menit sejak tengah malam.
+
+    None kalau nilainya KOSONG; melempar ValueError kalau nilainya ada tapi
+    tidak bisa dibaca. Pemanggil yang menerima masukan pengguna perlu
+    membedakan "tidak diisi" dari "salah ketik", dan itu tidak mungkin kalau
+    keduanya menjadi None.
+
+    Bentuk lama - angka jam bulat 0-23 - tetap diterima, supaya settings.json
+    yang sudah terpasang tidak perlu disunting tangan.
+    """
+    if nilai is None or isinstance(nilai, bool):
+        if nilai is None:
+            return None
+        raise ValueError(f"not a time: {nilai!r}")
+    if isinstance(nilai, int):
+        if not 0 <= nilai <= 23:
+            raise ValueError(f"hour must be 0-23, got {nilai!r}")
+        return nilai * 60
+    teks = str(nilai).strip()
+    if not teks:
+        return None
+    if teks.isdigit():
+        jam = int(teks)
+        if not 0 <= jam <= 23:
+            raise ValueError(f"hour must be 0-23, got {teks!r}")
+        return jam * 60
+    bagian = teks.split(":")
+    if len(bagian) != 2:
+        raise ValueError(f"time must look like 08:45, got {teks!r}")
+    try:
+        jam, menit = int(bagian[0]), int(bagian[1])
+    except ValueError:
+        raise ValueError(f"time must look like 08:45, got {teks!r}") from None
+    if not (0 <= jam <= 23 and 0 <= menit <= 59):
+        raise ValueError(f"time must look like 08:45, got {teks!r}")
+    return jam * 60 + menit
+
+
+def _clock_text(menit: int) -> str:
+    """Menit sejak tengah malam -> "HH:MM"."""
+    return f"{menit // 60:02d}:{menit % 60:02d}"
+
+
+def _clock_pair(mulai, sampai):
+    """Normalkan pasangan jam operasional, dan perbaiki yang mustahil.
+
+    Sengaja TIDAK melempar: dipanggil dari get_settings, yang dipanggil di
+    dalam loop penjadwal - melempar di situ mematikan autopilotnya. Salah ketik
+    dari dashboard tetap ditolak, oleh save_settings.
+    """
+    try:
+        awal = _clock_minutes(mulai)
+    except ValueError:
+        awal = None
+    if awal is None:
+        awal = _clock_minutes(DEFAULT_RUN_AT)
+    try:
+        akhir = _clock_minutes(sampai)
+    except ValueError:
+        akhir = None
+    if akhir is None:
+        akhir = 24 * 60          # kosong = sampai habis hari
+    if akhir <= awal:
+        akhir = 24 * 60          # pasangan mustahil -> buka sampai habis hari
+    return _clock_text(awal), ("" if akhir >= 24 * 60 else _clock_text(akhir))
+
+
 # --- settings -----------------------------------------------------------------
 
 def get_settings() -> dict:
@@ -114,29 +186,22 @@ def get_settings() -> dict:
     if not isinstance(data, dict):
         data = {}
     merged = json.loads(json.dumps(DEFAULT_SETTINGS))
-    for key in ("enabled", "run_hour", "run_hour_end", "timezone"):
+    for key in ("enabled", "run_at", "run_until", "timezone"):
         if key in data:
             merged[key] = data[key]
+    # Bentuk lama: run_hour / run_hour_end, angka jam bulat. Dibaca sebagai
+    # cadangan supaya settings.json yang sudah terpasang tidak perlu disunting
+    # tangan - dan supaya rollback tidak mengubah setelan siapa pun.
+    if "run_at" not in data and data.get("run_hour") is not None:
+        merged["run_at"] = data["run_hour"]
+    if "run_until" not in data and data.get("run_hour_end") is not None:
+        merged["run_until"] = data["run_hour_end"]
     delivery = data.get("delivery")
     if isinstance(delivery, dict):
         merged["delivery"].update(
             {k: v for k, v in delivery.items() if k in merged["delivery"]})
-    try:
-        merged["run_hour"] = int(merged["run_hour"])
-    except (TypeError, ValueError):
-        merged["run_hour"] = DEFAULT_RUN_HOUR
-    merged["run_hour"] = min(23, max(0, merged["run_hour"]))
-    try:
-        merged["run_hour_end"] = int(merged["run_hour_end"])
-    except (TypeError, ValueError):
-        merged["run_hour_end"] = DEFAULT_RUN_HOUR_END
-    else:
-        merged["run_hour_end"] = min(24, max(1, merged["run_hour_end"]))
-    if merged["run_hour_end"] <= merged["run_hour"]:
-        # Berkas lama, atau yang disunting tangan, bisa berisi pasangan yang
-        # mustahil. Diperbaiki alih-alih dilaporkan: get_settings dipanggil di
-        # dalam loop, dan melempar di situ mematikan penjadwalnya.
-        merged["run_hour_end"] = DEFAULT_RUN_HOUR_END
+    merged["run_at"], merged["run_until"] = _clock_pair(
+        merged.get("run_at"), merged.get("run_until"))
     merged["enabled"] = bool(merged["enabled"])
     return merged
 
@@ -151,34 +216,29 @@ def save_settings(patch: dict) -> dict:
     if not isinstance(patch, dict):
         raise ValueError("settings must be an object")
     current = get_settings()
-    allowed = {"enabled", "run_hour", "run_hour_end", "timezone", "delivery"}
+    allowed = {"enabled", "run_at", "run_until", "timezone", "delivery"}
     unknown = set(patch) - allowed
     if unknown:
         raise ValueError(f"unknown setting(s): {', '.join(sorted(unknown))}")
 
     if "enabled" in patch:
         current["enabled"] = bool(patch["enabled"])
-    if "run_hour" in patch:
+    if "run_at" in patch:
         try:
-            hour = int(patch["run_hour"])
-        except (TypeError, ValueError):
-            raise ValueError("run_hour must be an integer 0-23")
-        if not 0 <= hour <= 23:
-            raise ValueError("run_hour must be between 0 and 23")
-        current["run_hour"] = hour
-    if "run_hour_end" in patch:
-        nilai = patch["run_hour_end"]
-        if nilai is None or str(nilai).strip() == "":
-            # Kosong berarti "sampai habis hari" - itulah 23:59 yang diminta.
-            current["run_hour_end"] = DEFAULT_RUN_HOUR_END
-        else:
-            try:
-                akhir = int(nilai)
-            except (TypeError, ValueError):
-                raise ValueError("run_hour_end must be an integer 0-24")
-            if not 1 <= akhir <= 24:
-                raise ValueError("run_hour_end must be between 1 and 24")
-            current["run_hour_end"] = akhir
+            awal = _clock_minutes(patch["run_at"])
+        except ValueError as e:
+            raise ValueError(f"run_at: {e}") from None
+        if awal is None:
+            raise ValueError("run_at must be a time like 08:45")
+        current["run_at"] = _clock_text(awal)
+    if "run_until" in patch:
+        try:
+            akhir = _clock_minutes(patch["run_until"])
+        except ValueError as e:
+            raise ValueError(f"run_until: {e}") from None
+        # Kosong = sampai habis hari. Itulah "23:59" yang diminta, dan satu-
+        # satunya nilai yang bisa dikirim <input type="time"> yang dikosongkan.
+        current["run_until"] = "" if akhir is None else _clock_text(akhir)
     if "timezone" in patch:
         tz = str(patch["timezone"] or "").strip() or DEFAULT_TIMEZONE
         try:
@@ -218,11 +278,13 @@ def save_settings(patch: dict) -> dict:
                 cleaned.append({"name": name, "value": value})
             current["delivery"]["headers"] = cleaned
     # Diperiksa SETELAH semua field dipasang: satu permintaan bisa mengubah
-    # run_hour dan run_hour_end sekaligus, dan PASANGANNYA yang harus sah.
-    if current["run_hour_end"] <= current["run_hour"]:
+    # run_at dan run_until sekaligus, dan PASANGANNYA yang harus sah.
+    _awal = _clock_minutes(current["run_at"]) or 0
+    _akhir = _clock_minutes(current["run_until"])
+    if (_akhir if _akhir is not None else 24 * 60) <= _awal:
         raise ValueError(
-            f"run_hour_end ({current['run_hour_end']}) must be later than "
-            f"run_hour ({current['run_hour']})")
+            f"run_until ({current['run_until'] or 'end of day'}) must be "
+            f"later than run_at ({current['run_at']})")
     _write(_SETTINGS, current)
     return current
 
@@ -499,9 +561,18 @@ def in_window(settings=None, now=None) -> bool:
     """
     settings = settings or get_settings()
     local = local_now(settings, now)
-    mulai = int(settings.get("run_hour", DEFAULT_RUN_HOUR))
-    akhir = int(settings.get("run_hour_end", DEFAULT_RUN_HOUR_END))
-    return mulai <= local.hour < akhir
+    menit = local.hour * 60 + local.minute
+    try:
+        awal = _clock_minutes(settings.get("run_at"))
+    except ValueError:
+        awal = None
+    if awal is None:
+        awal = _clock_minutes(DEFAULT_RUN_AT)
+    try:
+        akhir = _clock_minutes(settings.get("run_until"))
+    except ValueError:
+        akhir = None
+    return awal <= menit < (akhir if akhir is not None else 24 * 60)
 
 
 def _as_timestamp(now) -> float:
