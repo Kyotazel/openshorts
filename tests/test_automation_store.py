@@ -120,3 +120,50 @@ def test_corrupt_file_is_set_aside(store):
     assert store.list_pending() == []
     import glob
     assert glob.glob(store._path("pending.json") + ".corrupt-*")
+
+
+# --- membuang video dari antrean ----------------------------------------------
+
+def test_remove_pending_membuang_video(store):
+    store.add_pending({"video_id": "v1"})
+    store.add_pending({"video_id": "v2"})
+    dibuang = store.remove_pending("v1")
+    assert dibuang["video_id"] == "v1"
+    assert [p["video_id"] for p in store.list_pending()] == ["v2"]
+
+
+def test_remove_pending_yang_tidak_ada_mengembalikan_none(store):
+    store.add_pending({"video_id": "v1"})
+    assert store.remove_pending("tidak-ada") is None
+    assert len(store.list_pending()) == 1
+
+
+def test_remove_pending_menolak_yang_sedang_jalan(store):
+    """Membuangnya akan membuat job itu yatim dan ZIP-nya tidak terkirim.
+
+    _automation_after_job mencari itemnya lewat list_pending(); kalau
+    barisnya sudah hilang, ia berhenti tanpa pesan apa pun. Lebih baik
+    tombolnya tidak melakukan apa-apa.
+    """
+    store.add_pending({"video_id": "v1"})
+    store.mark_queued("v1", "job-1")
+    assert store.remove_pending("v1") is None
+    assert store.find_pending("v1")["status"] == "queued"
+
+
+def test_yang_dibuang_tidak_pernah_dimulai(store):
+    store.save_settings({"enabled": True, "run_at": "00:00", "run_until": ""})
+    store.add_pending({"video_id": "v1"})
+    store.add_pending({"video_id": "v2"})
+    store.remove_pending("v1")
+    sisa = store.next_to_start()
+    assert sisa is not None and sisa["video_id"] == "v2"
+
+
+def test_membuang_status_apa_pun_selain_queued(store):
+    """failed, skip, dan done boleh dibersihkan dari daftar."""
+    for vid, status in (("v1", "failed"), ("v2", "skip"), ("v3", "done")):
+        store.add_pending({"video_id": vid})
+        store.update_pending(vid, status=status)
+        assert store.remove_pending(vid) is not None
+    assert store.list_pending() == []

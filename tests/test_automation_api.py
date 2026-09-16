@@ -463,6 +463,30 @@ def test_pump_tidak_memulai_di_luar_jam(dirs, monkeypatch):
     assert automation.find_pending("v1")["status"] == "new"   # tidak hilang
 
 
+# --- membuang video dari antrean (lewat HTTP) ---------------------------------
+
+def test_hapus_pending_lewat_api(dirs):
+    automation.add_pending({"video_id": "v1", "title": "Buang aku"})
+    r = _req("DELETE", "/api/automation/pending/v1")
+    assert r.status_code == 200
+    assert r.json()["status"] == "removed"
+    assert automation.list_pending() == []
+
+
+def test_hapus_pending_yang_tidak_ada_404(dirs):
+    assert _req("DELETE", "/api/automation/pending/tidak-ada").status_code == 404
+
+
+def test_hapus_pending_yang_sedang_jalan_409(dirs):
+    """Ditolak dengan pesan yang bisa dibaca, bukan dibatalkan diam-diam."""
+    automation.add_pending({"video_id": "v1"})
+    automation.mark_queued("v1", "job-1")
+    r = _req("DELETE", "/api/automation/pending/v1")
+    assert r.status_code == 409
+    assert "sedang berjalan" in r.json()["detail"]
+    assert automation.find_pending("v1")["status"] == "queued"
+
+
 def test_run_now_tetap_jalan_di_luar_jam(dirs, no_spawn):
     """Keputusan: run-now harus bisa dipakai kapan saja."""
     _req("POST", "/api/automation/settings",

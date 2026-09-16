@@ -435,6 +435,28 @@ def reset_pending(video_id: str) -> Optional[dict]:
                           next_attempt_at=0, last_error=None, job_id=None)
 
 
+def remove_pending(video_id: str) -> Optional[dict]:
+    """Buang satu video dari antrean supaya tidak pernah diproses.
+
+    Mengembalikan item yang dibuang, atau None kalau tidak ada.
+
+    MENOLAK item yang jobnya sedang berjalan (status "queued"). Membuangnya
+    akan membuat job itu yatim: _automation_after_job mencari itemnya lewat
+    list_pending(), tidak menemukannya, lalu berhenti - ZIP-nya tidak pernah
+    terkirim dan tidak ada satu pun pesan yang menjelaskan kenapa. Lebih baik
+    tombolnya tidak melakukan apa-apa daripada membatalkan secara diam-diam.
+    """
+    if (find_pending(video_id) or {}).get("status") == "queued":
+        return None
+    with _lock:
+        items = list_pending()
+        sisa = [p for p in items if p.get("video_id") != video_id]
+        if len(sisa) == len(items):
+            return None
+        _write(_PENDING, sisa)
+        return next(p for p in items if p.get("video_id") == video_id)
+
+
 def pending_for_run() -> list:
     return [p for p in list_pending() if p.get("status") == "new"]
 

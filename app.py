@@ -7430,6 +7430,21 @@ async def automation_run_now():
     return {"status": "started", "pending": len(automation.pending_for_run())}
 
 
+@app.delete("/api/automation/pending/{video_id}")
+async def automation_remove_pending(video_id: str):
+    """Buang video dari antrean supaya tidak pernah diproses."""
+    if not _automation_available():
+        raise HTTPException(status_code=404, detail="Not found")
+    item = automation.find_pending(video_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Video not found")
+    if automation.remove_pending(video_id) is None:
+        raise HTTPException(
+            status_code=409,
+            detail="Jobnya sedang berjalan. Tunggu sampai selesai, lalu hapus.")
+    return {"status": "removed", "video_id": video_id}
+
+
 @app.post("/api/automation/pending/{video_id}/retry")
 async def automation_retry_pending(video_id: str):
     if not _automation_available():

@@ -140,6 +140,14 @@ export default function AutomationPanel() {
     await load();
   }), [act, load]);
 
+  const removePending = useCallback((item) => act('remove-pending-' + item.video_id, async () => {
+    const judul = item.title || item.video_id;
+    if (!window.confirm('Remove "' + judul + '" from the queue? It will not be processed.')) return;
+    await apiJson('/api/automation/pending/' + item.video_id, { method: 'DELETE' });
+    setMessage('Removed from the queue.');
+    await load();
+  }), [act, load]);
+
   const resendDelivery = useCallback((jobId) => act('delivery-' + jobId, async () => {
     await apiJson('/api/automation/deliveries/' + jobId + '/retry', { method: 'POST' });
     setMessage('Sending again.');
@@ -428,6 +436,15 @@ export default function AutomationPanel() {
                       title="Try again"
                     >
                       <RefreshCw size={14} />
+                    </button>
+                  )}
+                  {item.status !== 'queued' && (
+                    <button
+                      onClick={() => removePending(item)}
+                      className="text-muted hover:text-warn transition-colors"
+                      title="Remove from the queue"
+                    >
+                      <Trash2 size={14} />
                     </button>
                   )}
                 </div>
