@@ -499,6 +499,32 @@ def test_yang_dilewati_tidak_ditemukan_ulang_lewat_api(dirs):
     assert automation.find_pending("v1")["status"] == "skip"
 
 
+# --- penjadwalan: tick dijatuhkan ke jam, seperti cron -----------------------
+
+@pytest.mark.parametrize("sekarang", [0.0, 0.4, 20.0, 59.9, 60.0, 61.5, 119.0])
+def test_tick_selalu_jatuh_di_kelipatan_interval(sekarang):
+    """Bukan "tidur selama interval": itu bergeser sebesar durasi kerja."""
+    sisa = app_module._detik_sampai_tick(60, sekarang)
+    assert sisa > 0
+    assert (sekarang + sisa) % 60 == pytest.approx(0, abs=0.5)
+
+
+def test_tick_300_jatuh_di_kelipatan_lima_menit():
+    for sekarang in (0.0, 61.0, 299.0, 301.0):
+        sisa = app_module._detik_sampai_tick(300, sekarang)
+        assert (sekarang + sisa) % 300 == pytest.approx(0, abs=0.5)
+
+
+def test_putaran_yang_kelamaan_tidak_menumpuk():
+    """Kalau satu putaran 70 detik, tick berikutnya kelipatan BERIKUTNYA.
+
+    Bukan langsung jalan lagi (yang akan jadi putaran rapat), dan bukan
+    juga tertinggal satu kelipatan.
+    """
+    sisa = app_module._detik_sampai_tick(60, 130.0)
+    assert sisa == pytest.approx(50.0)
+
+
 def test_hapus_pending_lewat_api(dirs):
     automation.add_pending({"video_id": "v1", "title": "Buang aku"})
     r = _req("DELETE", "/api/automation/pending/v1")

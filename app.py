@@ -6799,6 +6799,24 @@ async def saasshorts_voices(
 # tercepat antara satu job selesai dan job berikutnya dimulai.
 AUTOMATION_TICK_SECONDS = 60
 AUTOMATION_DELIVERY_TICK_SECONDS = 300
+
+
+def _detik_sampai_tick(interval: int, sekarang: float = None) -> float:
+    """Detik sampai tick berikutnya, dihitung dari kelipatan jam - seperti cron.
+
+    BUKAN "tidur selama interval". Cara itu membuat jadwalnya bergeser sebesar
+    durasi pekerjaan tiap putaran: mulai 15:39:20, putaran berikutnya 15:40:2x,
+    lalu 15:41:3x, dan seterusnya - makin lama makin jauh dari detik ke-0,
+    sehingga "ceknya tiap menit" tidak lagi berarti tiap menit pada jam.
+
+    Dengan mengacu ke kelipatan waktu Unix, tick-nya selalu jatuh di :00 untuk
+    interval 60, dan di :00/:05/:10 untuk interval 300. Kalau satu putaran
+    memakan waktu lebih lama daripada intervalnya, tick berikutnya langsung
+    jatuh ke kelipatan BERIKUTNYA - tidak ada putaran yang menumpuk.
+    """
+    sekarang = time.time() if sekarang is None else sekarang
+    berikutnya = (int(sekarang) // interval + 1) * interval
+    return max(0.5, berikutnya - sekarang)
 AUTOMATION_RETRY_DELAY_SECONDS = 1800
 AUTOMATION_MAX_ATTEMPTS = 3
 AUTOMATION_LEASE_RENEW_SECONDS = 12 * 3600
@@ -7084,7 +7102,7 @@ async def automation_loop():
     print("Autopilot: scheduler started.")
     while True:
         try:
-            await asyncio.sleep(AUTOMATION_TICK_SECONDS)
+            await asyncio.sleep(_detik_sampai_tick(AUTOMATION_TICK_SECONDS))
             if not _automation_available():
                 continue
             settings = automation.get_settings()
@@ -7237,7 +7255,9 @@ async def automation_delivery_loop():
             return
         except Exception as e:
             print(f"Autopilot: delivery worker error: {e}")
-        await asyncio.sleep(AUTOMATION_DELIVERY_TICK_SECONDS)
+        # Dijajarkan ke jam juga, supaya percobaan kirim ulang tidak
+        # bergeser tiap putaran.
+        await asyncio.sleep(_detik_sampai_tick(AUTOMATION_DELIVERY_TICK_SECONDS))
 
 
 async def _automation_after_job(job_id):
