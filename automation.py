@@ -358,9 +358,32 @@ def pending_due_retries(now=None) -> list:
     return due
 
 
+def claim_pending(video_id: str, *expected: str, **fields) -> Optional[dict]:
+    """Pindahkan status sebuah item HANYA kalau statusnya masih "expected".
+
+    Mengembalikan item kalau transisi terjadi, None kalau tidak. Dipakai
+    untuk menempelkan efek samping sekali-jalan (notifikasi Telegram) pada
+    perubahan status: dua pemanggil yang berjalan bersamaan menghasilkan
+    tepat satu pemenang, jadi pesannya tidak mungkin terkirim dua kali.
+    """
+    with _lock:
+        items = _read(_PENDING, [])
+        for item in items:
+            if item.get("video_id") != video_id:
+                continue
+            if expected and item.get("status") not in expected:
+                return None
+            item.update(fields)
+            _write(_PENDING, items)
+            return item
+    return None
+
+
 def mark_queued(video_id: str, job_id: str) -> Optional[dict]:
-    return update_pending(video_id, status="queued", job_id=job_id,
-                          next_attempt_at=0, last_error=None)
+    # CAS, bukan update buta: notifikasi "mulai" menempel pada keberhasilan
+    # transisi ini, jadi harus ada tepat satu pemanggil yang berhasil.
+    return claim_pending(video_id, "new", "retry", status="queued",
+                         job_id=job_id, next_attempt_at=0, last_error=None)
 
 
 def mark_pending_failure(video_id: str, error: str, retry_after_seconds: int = 1800,
@@ -368,8 +391,13 @@ def mark_pending_failure(video_id: str, error: str, retry_after_seconds: int = 1
     item = find_pending(video_id) or {}
     attempts = int(item.get("attempts") or 0) + 1
     if permanent:
-        return update_pending(video_id, status="skip", attempts=attempts,
-                              last_error=(error or "")[:500])
+        # CAS: "skip" itu final, jadi transisinya hanya boleh terjadi sekali.
+        # Notifikasi "dilewati" menempel pada kemenangannya - tanpa ini,
+        # pemanggil kedua (pass harian menyusul retry sweep) mengirim pesan
+        # yang sama lagi.
+        return claim_pending(video_id, "new", "retry", status="skip",
+                             attempts=attempts,
+                             last_error=(error or "")[:500])
     if attempts >= 3:
         return update_pending(video_id, status="failed", attempts=attempts,
                               last_error=(error or "")[:500], next_attempt_at=0)
@@ -378,16 +406,26 @@ def mark_pending_failure(video_id: str, error: str, retry_after_seconds: int = 1
                           next_attempt_at=time.time() + retry_after_seconds)
 
 
-def mark_job_finished(job_id: str, ok: bool, error: Optional[str] = None):
-    """Called when an automation job reaches a terminal state."""
+def mark_job_finished(job_id: str, ok: bool,
+                      error: Optional[str] = None) -> Optional[dict]:
+    """Called when an automation job reaches a terminal state.
+
+    Mengembalikan item antreannya, atau None kalau job ini bukan milik
+    autopilot. Pemanggil memakai status akhirnya untuk memutuskan apakah
+    pesan kegagalan masih boleh berbunyi "akan dicoba lagi".
+    """
     for item in list_pending():
         if item.get("job_id") != job_id:
             continue
+        if item.get("status") != "queued":
+            # Sudah dituntaskan sebelumnya. Mengembalikan None membuat
+            # pemanggil melewati notifikasinya, jadi satu job tetap satu pesan.
+            return None
         if ok:
-            update_pending(item["video_id"], status="done", last_error=None)
-        else:
-            mark_pending_failure(item["video_id"], error or "job failed")
-        return
+            return claim_pending(item["video_id"], "queued", status="done",
+                                 last_error=None)
+        return mark_pending_failure(item["video_id"], error or "job failed")
+    return None
 
 
 # --- schedule ------------------------------------------------------------------

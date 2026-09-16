@@ -34,6 +34,7 @@ import layout_ranges
 import automation
 import automation_delivery
 import manual_notify
+import autopilot_notify
 import channel_watch
 from download_format import scrub_node_ipc_env
 
@@ -6833,19 +6834,31 @@ async def _automation_submit_pending(item):
     guard = automation.find_pending(video_id)
     if not guard or guard.get("status") in ("queued", "done"):
         return
+    judul = autopilot_notify.judul_dari(guard, item)
     try:
         result = await _automation_build_job(item)
     except AutomationSourceError as e:
-        automation.mark_pending_failure(video_id, str(e), permanent=e.permanent)
+        updated = automation.mark_pending_failure(video_id, str(e),
+                                                  permanent=e.permanent)
         print(f"Autopilot: skipped {video_id}: {e}")
+        # HANYA kegagalan permanen yang dikabari. Video yang masih akan dicoba
+        # lagi bukan "dilewati" - mengabarinya tiap percobaan berarti tiga
+        # pesan identik untuk satu video.
+        if e.permanent and (updated or {}).get("status") == "skip":
+            await autopilot_notify.kirim(
+                autopilot_notify.pesan_dilewati(judul, str(e)))
     except Exception as e:
         automation.mark_pending_failure(
             video_id, f"{type(e).__name__}: {e}",
             retry_after_seconds=AUTOMATION_RETRY_DELAY_SECONDS)
         print(f"Autopilot: submit failed for {video_id}: {e}")
     else:
-        automation.mark_queued(video_id, result["job_id"])
-        print(f"Autopilot: queued {video_id} as {result['job_id']}")
+        # CAS: notifikasi menempel pada kemenangan transisi ini, jadi dua
+        # pemanggil yang balapan tetap menghasilkan satu pesan.
+        if automation.mark_queued(video_id, result["job_id"]):
+            print(f"Autopilot: queued {video_id} as {result['job_id']}")
+            await autopilot_notify.kirim(
+                autopilot_notify.pesan_mulai(judul))
 
 
 async def _automation_build_job(item):
@@ -6921,6 +6934,23 @@ async def _automation_daily_pass():
         automation.set_last_run(local.date().isoformat())
 
 
+async def _automation_add_pending_notified(entry):
+    """add_pending + kabari sekali. Dipakai RSS maupun WebSub.
+
+    Notifikasi menempel pada created=True, yang hanya benar-benar terjadi sekali
+    per video: add_pending sudah dedup berdasarkan video_id, jadi WebSub dan
+    RSS yang menangkap video sama hanya menghasilkan satu pesan.
+    """
+    item, created = automation.add_pending(entry)
+    if created:
+        settings = automation.get_settings()
+        jam = int(settings.get("run_hour") or 8)
+        await autopilot_notify.kirim(autopilot_notify.pesan_video_baru(
+            item.get("title") or "", item.get("channel_title") or "",
+            f"jam {jam:02d}:00"))
+    return item, created
+
+
 async def _automation_poll_channels(settings):
     """RSS fallback: catch anything WebSub did not deliver."""
     subs = automation.list_subscriptions()
@@ -6946,7 +6976,7 @@ async def _automation_poll_channels(settings):
 
     added = 0
     for entry in await loop.run_in_executor(None, _fetch):
-        _, created = automation.add_pending(entry)
+        _, created = await _automation_add_pending_notified(entry)
         added += int(created)
     if added:
         print(f"Autopilot: RSS found {added} new video(s).")
@@ -7078,6 +7108,9 @@ async def _automation_send(job_id, state):
                 fields=_automation_outbox_fields(state),
                 timeout=AUTOMATION_DELIVERY_TIMEOUT)
 
+        # Dibaca SEBELUM state ditimpa: pengiriman bisa dicoba berkali-kali,
+        # dan pesan "terkirim" hanya boleh keluar sekali.
+        sudah_terkirim = bool(state.get("delivered_at"))
         if ok:
             state.update(
                 status="sent", last_error=None, next_attempt_at=0,
@@ -7086,6 +7119,10 @@ async def _automation_send(job_id, state):
                           if zip_path and os.path.exists(zip_path) else None))
             automation.outbox_put(job_id, state)
             print(f"Autopilot: delivered {job_id} (attempt {attempts}).")
+            if not sudah_terkirim:
+                await autopilot_notify.kirim(autopilot_notify.pesan_terkirim(
+                    int((state.get("meta") or {}).get("clip_count") or 0),
+                    int(state.get("zip_size") or 0)))
             return True
 
         state["last_error"] = (detail or "delivery failed")[:500]
@@ -7094,6 +7131,8 @@ async def _automation_send(job_id, state):
             state["next_attempt_at"] = 0
             print(f"Autopilot: delivery failed for {job_id} after {attempts} "
                   f"attempts: {state['last_error']}")
+            await autopilot_notify.kirim(
+                autopilot_notify.pesan_gagal_kirim(state["last_error"]))
         else:
             state["status"] = "pending"
             state["next_attempt_at"] = time.time() + AUTOMATION_DELIVERY_TICK_SECONDS
@@ -7134,15 +7173,32 @@ async def _automation_after_job(job_id):
         meta = job.get("automation")
         if not meta:
             return
+        # mark_job_finished mengembalikan None kalau job ini sudah dituntaskan
+        # sebelumnya. Berhenti di situ: satu job, satu pesan.
+        judul = autopilot_notify.judul_dari(meta)
         if job.get("status") != "completed":
-            automation.mark_job_finished(
-                job_id, False, _job_error_text(job.get("logs", []))[-300:])
+            alasan = _job_error_text(job.get("logs", []))[-300:]
+            item = automation.mark_job_finished(job_id, False, alasan)
+            if item is None:
+                return
+            await autopilot_notify.kirim(autopilot_notify.pesan_gagal_proses(
+                judul, alasan,
+                akan_dicoba_lagi=item.get("status") != "failed"))
             return
         clips = (job.get("result") or {}).get("clips") or []
         if not clips:
-            automation.mark_job_finished(job_id, False, "no clips produced")
+            item = automation.mark_job_finished(job_id, False, "no clips produced")
+            if item is None:
+                return
+            await autopilot_notify.kirim(autopilot_notify.pesan_gagal_proses(
+                judul, "Tidak ada klip yang dihasilkan.",
+                akan_dicoba_lagi=item.get("status") != "failed"))
             return
-        automation.mark_job_finished(job_id, True)
+        if automation.mark_job_finished(job_id, True) is None:
+            return
+        await autopilot_notify.kirim(autopilot_notify.pesan_clipping_selesai(
+            autopilot_notify.judul_dari(meta, clips[0] if clips else None),
+            len(clips)))
 
         delivery = (automation.get_settings().get("delivery") or {})
         state = {
@@ -7435,7 +7491,7 @@ async def automation_websub_notify(request: Request):
             continue
         if not _published_after(entry.get("published"), sub.get("created_at")):
             continue
-        _, created = automation.add_pending(
+        _, created = await _automation_add_pending_notified(
             {**entry, "channel_title": sub.get("title") or parsed.get("title") or ""})
         added += int(created)
     if added:

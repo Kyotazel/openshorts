@@ -132,6 +132,11 @@ def test_post_zip_allows_a_private_target_when_opted_in(zip_file, monkeypatch):
 
 
 def test_post_zip_rejects_unsafe_target(zip_file, monkeypatch):
+    # Suite ini mengimpor app.py, yang menjalankan load_dotenv(): kalau .env
+    # pengembang memuat AUTOMATION_ALLOW_PRIVATE_TARGET=1 (wajib untuk
+    # menguji kirim ke 127.0.0.1 di lokal), penjaga SSRF ikut mati dan tes
+    # ini lulus/gagal tergantung isi .env. Hapus dulu supaya tegas.
+    monkeypatch.delenv("AUTOMATION_ALLOW_PRIVATE_TARGET", raising=False)
     def _boom(url):
         raise security_utils.UnsafeURLError("private host")
     monkeypatch.setattr(security_utils, "assert_public_url", _boom)
