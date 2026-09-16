@@ -1023,6 +1023,53 @@ def _enforce_output_size_cap():
         print(f"🧹 Size cap: purged {job_id} ({size / 1024**2:.0f} MB)")
 
 
+def _sumber_job(job_id: str):
+    """Path video sumber YouTube milik satu job, atau None.
+
+    Dibaca dari metadata, bukan ditebak dari pola nama: nama berkasnya
+    ditentukan yt-dlp, dan menebaknya berarti salah hapus.
+    """
+    try:
+        metas = glob.glob(os.path.join(OUTPUT_DIR, job_id, "*_metadata.json"))
+        if not metas:
+            return None
+        with open(metas[0]) as f:
+            nama = json.load(f).get("source_video")
+        if not nama:
+            return None
+        jalur = os.path.join(OUTPUT_DIR, job_id, os.path.basename(nama))
+        return jalur if os.path.exists(jalur) else None
+    except Exception:
+        return None
+
+
+def _hapus_sumber_job(job_id: str) -> bool:
+    """Hapus video sumber YouTube milik satu job. True kalau benar terhapus.
+
+    HANYA sumbernya. Klip hasil dan berkas antara dibiarkan, sesuai keputusan
+    pemiliknya - jadi yang dihemat memang hanya satu berkas per video, bukan
+    seluruh isi direktori job.
+
+    Dipanggil begitu ZIP-nya terkirim: setelah itu sumbernya tidak dibutuhkan
+    oleh apa pun, karena ZIP dibangun dari klip, bukan dari sumber.
+
+    Tidak pernah melempar. Berkas yang gagal dihapus akan disapu
+    _sweep_retained_sources seperti biasa, dan itu jauh lebih ringan daripada
+    pengiriman yang dianggap gagal.
+    """
+    jalur = _sumber_job(job_id)
+    if not jalur:
+        return False
+    try:
+        os.remove(jalur)
+        print(f"Autopilot: sumber {job_id} dihapus "
+              f"({os.path.basename(jalur)}).")
+        return True
+    except OSError as e:
+        print(f"Autopilot: gagal menghapus sumber {job_id}: {e}")
+        return False
+
+
 def _sweep_retained_sources(now=None):
     """Delete retained downloads older than SOURCE_RETENTION_SECONDS.
 
@@ -1037,16 +1084,10 @@ def _sweep_retained_sources(now=None):
         if job_id == os.path.basename(THUMBNAILS_DIR):
             continue
         try:
-            metas = glob.glob(os.path.join(OUTPUT_DIR, job_id, "*_metadata.json"))
-            if not metas:
+            src = _sumber_job(job_id)
+            if not src:
                 continue
-            with open(metas[0]) as f:
-                name = json.load(f).get('source_video')
-            if not name:
-                continue
-            src = os.path.join(OUTPUT_DIR, job_id, os.path.basename(name))
-            if (os.path.exists(src)
-                    and now - os.path.getmtime(src) > SOURCE_RETENTION_SECONDS):
+            if now - os.path.getmtime(src) > SOURCE_RETENTION_SECONDS:
                 os.remove(src)
                 yield job_id
         except Exception:
@@ -6950,7 +6991,8 @@ async def _automation_add_pending_notified(entry):
         settings = automation.get_settings()
         await autopilot_notify.kirim(autopilot_notify.pesan_video_baru(
             item.get("title") or "", item.get("channel_title") or "",
-            f"jam {settings.get('run_at') or '08:00'}"))
+            f"jam {settings.get('run_at') or '08:00'}",
+            item.get("url") or ""))
     return item, created
 
 
@@ -7156,6 +7198,11 @@ async def _automation_send(job_id, state):
                 await autopilot_notify.kirim(autopilot_notify.pesan_terkirim(
                     int((state.get("meta") or {}).get("clip_count") or 0),
                     int(state.get("zip_size") or 0)))
+            # Sumbernya tidak dibutuhkan lagi sekarang ZIP-nya ada di
+            # Klip-Studio. Ditaruh SETELAH penanda "sudah terkirim", bukan di
+            # dalamnya: percobaan kirim ulang tidak perlu menghapus dua kali,
+            # dan _hapus_sumber_job memang sudah aman dipanggil berkali-kali.
+            _hapus_sumber_job(job_id)
             return True
 
         state["last_error"] = (detail or "delivery failed")[:500]

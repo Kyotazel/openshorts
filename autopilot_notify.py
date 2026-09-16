@@ -57,11 +57,16 @@ def _kutip(judul: str, pengganti: str) -> str:
     return f'"{judul}"' if judul else pengganti
 
 
-def pesan_video_baru(judul: str, channel: str = "", jadwal: str = "") -> str:
+def pesan_video_baru(judul: str, channel: str = "", jadwal: str = "",
+                     url: str = "") -> str:
     baris = ["📺 Video baru terdeteksi (autopilot)", ""]
     baris.append(_kutip(judul, "Video baru"))
     if channel:
         baris.append(f"dari {channel}")
+    if url:
+        # Linknya, bukan cuma judulnya: tanpa ini mencari videonya di YouTube
+        # berarti menebak dari judul, dan judul pendek sering kembar.
+        baris += ["", url]
     baris += ["", f"Masuk antrean. Diproses {jadwal}." if jadwal
               else "Masuk antrean, menunggu jadwal harian."]
     return "\n".join(baris)
