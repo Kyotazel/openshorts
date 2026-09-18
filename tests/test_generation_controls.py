@@ -62,14 +62,16 @@ def _templates():
 class TestPromptTemplates:
     def test_detail_template_carries_the_band(self):
         text = _templates()["DETAIL_PROMPT_TEMPLATE"].format(
-            video_duration=100, language="es", min_clips=2, max_clips=4,
+            video_duration=100, language="es", copy_language="Indonesian (id)",
+            min_clips=2, max_clips=4,
             min_secs=10.0, max_secs=20.0, windows_json="[]")
         assert "10 to 20 seconds" in text
         assert "return 2 to 4 clips" in text
 
     def test_visual_template_carries_band_and_count(self):
         text = _templates()["VISUAL_PROMPT_TEMPLATE"].format(
-            video_duration=100, language="es", min_clips=2, max_clips=4,
+            video_duration=100, language="es", copy_language="Indonesian (id)",
+            min_clips=2, max_clips=4,
             min_secs=10.0, max_secs=20.0)
         assert "2–4 MOST engaging" in text
         assert "10 to 20 seconds" in text

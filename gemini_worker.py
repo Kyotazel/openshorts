@@ -11,6 +11,7 @@ from pydantic import BaseModel
 
 from clip_selection import (clip_count_targets, clip_duration_bounds,
                             lookup_model_prices)
+from copy_language import copy_language_for, language_label
 
 load_dotenv()
 
@@ -76,7 +77,7 @@ TIME CONTRACT — STRICT:
   shorter than {min_secs:g}s, return one clip spanning the full video.
 - Cut on visual scene changes, never mid-motion.
 
-For each clip write catchy copy in {language} (a scroll-stopping hook, a TikTok
+For each clip write catchy copy in {copy_language} (a scroll-stopping hook, a TikTok
 and an Instagram description, and a YouTube title ≤100 chars). Order clips best
 to worst by how likely they are to stop a viewer scrolling.
 """
@@ -99,7 +100,7 @@ meaning is on the screen, not in the face.
 1. `on_screen`: one line naming what is shown — the app, window, product,
    document, code, chart or on-screen text — as specifically as the frames
    allow (read visible titles and labels).
-2. `viral_hook_text`: max 10 words, in TRANSCRIPT_LANGUAGE. It MUST mention
+2. `viral_hook_text`: max 10 words, in {copy_language}. It MUST mention
    the thing you named in `on_screen` (or the action being done to it: set
    up, connect, compare, fix, type) AND keep the strongest concrete fact of
    the clip: a number, a multiplier, a price, a name ("7x faster", "$136 a
@@ -107,12 +108,13 @@ meaning is on the screen, not in the face.
    summary of the video's general topic, never a slogan that would fit any
    clip of this video, never drop a figure for a vaguer phrase.
 3. `video_title_for_youtube_short`: max 100 chars, same rule, in
-   TRANSCRIPT_LANGUAGE, no fake claims.
+   {copy_language}, no fake claims.
 
 The current hook and title below were written WITHOUT seeing the frames and
 are the kind of topic summary you must replace. Do not reuse their wording.
 
 TRANSCRIPT_LANGUAGE: {language}
+COPY_LANGUAGE: {copy_language}
 CURRENT_HOOK (to replace): {current_hook}
 CURRENT_TITLE (to replace): {current_title}
 TRANSCRIPT:
@@ -314,20 +316,23 @@ HOOK PLAYBOOK — pick the strongest fitting pattern for `viral_hook_text` (max 
 - Number / fact shock: "97% of people miss this."
 - Story loop: "This one email almost ruined me."
 - POV / pattern interrupt: "POV: you finally understand it."
-(These are English PATTERNS — always write the actual hook in TRANSCRIPT_LANGUAGE.)
+(These are English PATTERNS — always write the actual hook in {copy_language}.)
 - ABOUT THIS MOMENT, NOT THE VIDEO: the hook and the title name the concrete
   thing that happens inside this clip — the tool being set up, the action,
   the number, the claim, the name. A line that could sit on any clip of this
   video ("I automated my clips with AI") is wrong. If nothing concrete can be
   named, quote the clip's strongest sentence instead of summarising the topic.
 
-COPY RULES — ALL text fields (descriptions, title, hook) MUST be written in TRANSCRIPT_LANGUAGE ({language}):
+COPY RULES — ALL text fields (descriptions, hashtags, title, hook) MUST be
+written in {copy_language}, whatever language the transcript is in: write the
+copy natively in {copy_language}, never paste the transcript's own words.
 - Descriptions (TikTok + Instagram): 1-2 punchy sentences that tease the payoff
   without spoiling it, then 3-5 topically relevant hashtags. No generic hashtag spam.
 - `video_title_for_youtube_short`: max 100 chars, curiosity-driven, no fake claims.
 - `predicted_score`: honest 0-100 estimate of viral potential.
 
 TRANSCRIPT_LANGUAGE: {language}
+COPY_LANGUAGE: {copy_language}
 VIDEO_DURATION_SECONDS: {video_duration}
 CANDIDATE_WINDOWS_JSON:
 {windows_json}
@@ -555,6 +560,7 @@ def main() -> int:
     fmt = {
         "video_duration": payload["video_duration"],
         "language": language,
+        "copy_language": language_label(copy_language_for(language)),
         "windows_json": json.dumps(payload["windows"], ensure_ascii=False),
     }
     if args.mode != "score":

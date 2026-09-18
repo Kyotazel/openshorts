@@ -111,6 +111,20 @@ def test_rewrites_hook_and_title_and_keeps_the_originals(gemini):
     assert "TRANSCRIPT_LANGUAGE: es" in gemini["prompt"]
 
 
+def test_copy_language_reaches_the_grounding_prompt(gemini, monkeypatch):
+    monkeypatch.setenv("COPY_LANGUAGE", "id")
+    clip = {"viral_hook_text": "old", "layout_ranges": SCREEN}
+    hg.reground("clip.mp4", clip, {"language": "es", "segments": []}, 0, 30)
+    assert "COPY_LANGUAGE: Indonesian (id)" in gemini["prompt"]
+
+
+def test_copy_language_auto_follows_the_transcript_again(gemini, monkeypatch):
+    monkeypatch.setenv("COPY_LANGUAGE", "auto")
+    clip = {"viral_hook_text": "old", "layout_ranges": SCREEN}
+    hg.reground("clip.mp4", clip, {"language": "es", "segments": []}, 0, 30)
+    assert "COPY_LANGUAGE: Spanish (es)" in gemini["prompt"]
+
+
 def test_without_a_gemini_key_the_transcript_hook_stands(monkeypatch):
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     clip = {"viral_hook_text": "old", "layout_ranges": SCREEN}
@@ -142,4 +156,5 @@ def test_detail_prompt_forbids_topic_summary_hooks():
     assert "ABOUT THIS MOMENT, NOT THE VIDEO" in gemini_worker.DETAIL_PROMPT_TEMPLATE
     assert "{on_screen" not in gemini_worker.DETAIL_PROMPT_TEMPLATE  # no stray placeholders
     gemini_worker.GROUNDED_HOOK_PROMPT.format(
-        language="es", current_hook="a", current_title="b", transcript="c")
+        language="es", copy_language="Indonesian (id)",
+        current_hook="a", current_title="b", transcript="c")

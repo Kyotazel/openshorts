@@ -28,6 +28,7 @@ import llm_backend
 from clip_selection import (build_transcript_windows, clip_count_targets,
                             clip_duration_bounds, snap_clip_to_words,
                             trim_to_best)
+from copy_language import copy_language_for, language_label
 from download_format import download_source_height, youtube_download_format, scrub_node_ipc_env
 from ffmpeg_utils import (video_encode_args, audio_encode_args, QUALITY,
                           QUALITY_FAST, METADATA_SCRUB)
@@ -1651,6 +1652,9 @@ def get_viral_clips(transcript_result, video_duration):
     word boundaries so clips don't start/end mid-word.
     """
     language = str(transcript_result.get('language') or 'unknown')
+    # Copy ditulis dalam bahasanya SENDIRI, bukan bahasa transkrip: video
+    # Inggris untuk audiens Indonesia dulu menghasilkan caption Inggris.
+    copy_lang = language_label(copy_language_for(language))
     if llm_backend.active():
         # Self-hosted text model: no Google key needed for this stage.
         client = None
@@ -1665,7 +1669,7 @@ def get_viral_clips(transcript_result, video_duration):
             return None
         client = genai.Client(api_key=api_key)
         model_name = os.environ.get("GEMINI_MODEL") or 'gemini-3.1-flash-lite'
-    print(f"\U0001f916  Model: {model_name} | language: {language}")
+    print(f"\U0001f916  Model: {model_name} | language: {language} | copy: {copy_lang}")
 
     # Full word list — ground truth for snapping cut points.
     words = []
@@ -1722,6 +1726,7 @@ def get_viral_clips(transcript_result, video_duration):
             # still hold the best clips, and the model returns fewer anyway.
             return gemini_worker.DETAIL_PROMPT_TEMPLATE.format(
                 video_duration=video_duration, language=language,
+                copy_language=copy_lang,
                 min_clips=min_clips, max_clips=max_clips,
                 min_secs=min_secs, max_secs=max_secs,
                 windows_json=json.dumps(_payload(ws), ensure_ascii=False))
@@ -1794,6 +1799,8 @@ def get_visual_clips(video_path, video_duration, language="en"):
     most engaging visual moments (no transcript). Returns the same
     {"shorts", "cost_analysis"} shape as get_viral_clips, or None."""
     print("🎥  Silent video — analyzing with Gemini vision (no transcript)...")
+    copy_lang = language_label(copy_language_for(language))
+    print(f"🎥  Copy language: {copy_lang}")
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
         if llm_backend.active():
@@ -1835,7 +1842,7 @@ def get_visual_clips(video_path, video_duration, language="en"):
         v_max_clips = max(v_min_clips, _env_int("CLIP_TARGET_MAX", 15))
         v_min_secs, v_max_secs = clip_duration_bounds()
         prompt = gemini_worker.VISUAL_PROMPT_TEMPLATE.format(
-            video_duration=video_duration, language=language,
+            video_duration=video_duration, copy_language=copy_lang,
             min_clips=v_min_clips, max_clips=v_max_clips,
             min_secs=v_min_secs, max_secs=v_max_secs)
         config = genai_types.GenerateContentConfig(

@@ -157,7 +157,8 @@ class TestDetailPromptCarriesTheCount:
         gw = pytest.importorskip("gemini_worker")
         low, high = clip_count_targets(5)
         prompt = gw.DETAIL_PROMPT_TEMPLATE.format(
-            video_duration=300, language="es", min_clips=low, max_clips=high,
+            video_duration=300, language="es", copy_language="Indonesian (id)",
+            min_clips=low, max_clips=high,
             min_secs=15.0, max_secs=60.0, windows_json="[]")
         assert f"return {low} to {high} clips" in prompt
         assert "15 to 60 seconds" in prompt

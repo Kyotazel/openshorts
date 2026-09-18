@@ -24,6 +24,8 @@ import json
 import os
 from typing import Optional
 
+from copy_language import copy_language_for, language_label
+
 SCREEN_LAYOUTS = {"screencast", "wide", "inset"}
 FRAMES = int(os.environ.get("HOOK_GROUNDING_FRAMES", "3"))
 WIDTH = int(os.environ.get("HOOK_GROUNDING_WIDTH", "1024"))
@@ -160,6 +162,7 @@ def reground(clip_path, clip, transcript, start, end) -> Optional[dict]:
         language = str((transcript or {}).get("language") or "unknown")
         prompt = gemini_worker.GROUNDED_HOOK_PROMPT.format(
             language=language,
+            copy_language=language_label(copy_language_for(language)),
             current_hook=clip.get("viral_hook_text") or "",
             current_title=clip.get("video_title_for_youtube_short") or "",
             transcript=clip_words(transcript, start, end)[:4000] or "(no speech)")
